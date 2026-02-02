@@ -2,8 +2,6 @@
 
 **Language Learner** 是一款专为 Obsidian 设计的沉浸式语言学习插件。它将查词、生词管理、AI 辅助和阅读模式无缝集成到您的知识库中，帮助您在阅读和写作的过程中自然地积累词汇，构建个人语言数据库。
 
-![Banner](https://github.com/user-attachments/assets/placeholder)
-
 ## ✨ 主要功能 (Features)
 
 *   **🔍 多源查词 (Multi-source Dictionary)**
