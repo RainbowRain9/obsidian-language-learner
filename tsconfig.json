@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths":{
+        "@/*": ["./src/*"],
+        "@dict/*": ["./src/dictionary/*"],
+        "@comp/*": ["./src/component/*"]
+    },
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "module": "ESNext",
+    "target": "ES6",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "moduleResolution": "node",
+    "importHelpers": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "jsx":"preserve",
+    "lib": [
+      "DOM",
+      "ES5",
+      "ES6",
+      "ES7",
+      "dom.iterable"
+    ]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.vue"
+  ],
+  "exclude": [
+    "backup_*",
+    "node_modules"
+  ]
+  // "vueCompilerOptions": {
+  //   "target": 3,
+  //   "jsxTemplates": true,
+  //   "experimentalRfc436": true,
+  // }  
+}

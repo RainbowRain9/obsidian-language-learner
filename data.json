@@ -1,0 +1,59 @@
+{
+  "use_server": false,
+  "port": 8086,
+  "self_server": false,
+  "self_port": 3002,
+  "native": "zh",
+  "foreign": "en",
+  "popup_search": false,
+  "auto_pron": false,
+  "function_key": "ctrlKey",
+  "dictionaries": {
+    "youdao": {
+      "enable": true,
+      "priority": 1
+    },
+    "cambridge": {
+      "enable": true,
+      "priority": 2
+    },
+    "ai": {
+      "enable": false,
+      "priority": 3
+    },
+    "google": {
+      "enable": false,
+      "priority": 4
+    }
+  },
+  "dict_height": "800",
+  "db_name": "WordDB",
+  "word_database": "04-Resources/words.md",
+  "review_database": "04-Resources/review.md",
+  "col_delimiter": ",",
+  "auto_refresh_db": true,
+  "use_fileDB": true,
+  "word_folder": "Vocabulary",
+  "only_fileDB": true,
+  "default_paragraphs": "all",
+  "font_size": "36px",
+  "font_family": "\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif",
+  "line_height": "2.2em",
+  "use_machine_trans": true,
+  "word_count": true,
+  "hover_definition_enabled": true,
+  "hover_definition_lang": "zh",
+  "review_prons": "0",
+  "review_delimiter": "?",
+  "last_sync": "2026-02-02T18:13:23.807Z",
+  "last_word_db_hash": "6-269-#### 新学\nconsonant,    辅音\nfascinated,    着迷\nmimicking,    模仿\nobsessed,    （对……）着迷的\npronunciation,    发音\nvowels,     元音\n\n#### 眼熟\n\n\n#### 了解\n\n\n#### 掌握\n\n\n\n#### 反向查询\n辅音  ,  consonant\n着迷  ,  fascinated\n模仿  ,  mimicking\n（对……）着迷的  ,  obsessed\n发音  ,  pronunciation\n -nant,    辅音\nfascinated,    着迷\nmimicking,    模仿\nobsessed,    （对……）着迷的\npronunciation,    发音\nvowels,     元音\n\n#### 眼熟\n\n\n#### 了解\n\n\n#### 掌握\n\n\n\n#### 反向查询\n辅音  ,  consonant\n着迷  ,  fascinated\n模仿  ,  mimicking\n（对……）着迷的  ,  obsessed\n发音  ,  pronunciation\n 元音  ,  vowels",
+  "ai": {
+    "provider": "siliconflow",
+    "api_key": "sk-gprslasmsuunzjrqanxqckxoizopvcrtybxsoxnbmjyqcjce",
+    "api_url": "https://api.siliconflow.cn/v1/chat/completions",
+    "model": "deepseek-ai/DeepSeek-V3",
+    "prompt": "You are a helpful English learning assistant. Explain the meaning of words clearly and provide examples.",
+    "trans_prompt": "只保留译文；\nTranslate the following sentence into Chinese accurately and naturally: {sentence}"
+  },
+  "activeTab": "ai"
+}
