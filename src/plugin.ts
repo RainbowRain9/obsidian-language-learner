@@ -545,12 +545,13 @@ export default class LanguageLearner extends Plugin {
             }
         }
 
-        const lastSync = this.settings.last_sync || "1970-01-01T00:00:00Z";
-        let data = await this.db.getExpressionAfter(lastSync);
-        if (data.length === 0) {
-            // new Notice("Nothing new")
-            return;
-        }
+        // 每次都按当前全部非无视词条全量重建，避免增量刷新时覆盖掉旧内容。
+        let data = await this.db.getExpressionAfter("1970-01-01T00:00:00Z");
+        const wordsByExpression = new Map<string, typeof data[number]>();
+        data.forEach((word) => {
+            wordsByExpression.set(word.expression, word);
+        });
+        data = [...wordsByExpression.values()];
 
         data.sort((a, b) => a.expression.localeCompare(b.expression));
 
@@ -578,12 +579,15 @@ export default class LanguageLearner extends Plugin {
                 `${sentences}` +
                 (oldRecord[word.expression] ? oldRecord[word.expression] + "\n" : "")
             );
-        }).join("\n") + "\n";
+        }).join("\n");
 
+        if (newText) {
+            newText += "\n";
+        }
         newText = "#flashcards\n\n" + newText;
         await this.app.vault.modify(db, newText);
         this.settings.last_sync = moment.utc().toISOString();
-        this.saveSettings();
+        await this.saveSettings();
     };
 
     // 在MardownView的扩展菜单加一个转为Reading模式的选项

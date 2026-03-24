@@ -774,6 +774,16 @@ export class SettingTab extends PluginSettingTab {
                     })
             );
 
+        new Setting(containerEl)
+            .setName(t("Refresh Review Database"))
+            .addButton((button) =>
+                button
+                    .setButtonText(t("Update"))
+                    .onClick(async () => {
+                        await this.plugin.refreshReviewDb();
+                    })
+            );
+
 
     }
 
