@@ -76,6 +76,7 @@ export default class LanguageLearner extends Plugin {
     async onload() {
         // 读取设置
         await this.loadSettings();
+        await this.ensureDefaultTextDbFiles();
         this.addSettingTab(new SettingTab(this.app, this));
 
         this.registerConstants();
@@ -200,6 +201,39 @@ export default class LanguageLearner extends Plugin {
         };
     }
 
+    async ensureDefaultTextDbFiles() {
+        const defaults: Array<{
+            key: "word_database" | "review_database";
+            path: string;
+        }> = [
+            { key: "word_database", path: "words.md" },
+            { key: "review_database", path: "review.md" },
+        ];
+
+        let settingsUpdated = false;
+
+        for (const item of defaults) {
+            if (this.settings[item.key]) {
+                continue;
+            }
+
+            if (!this.app.vault.getAbstractFileByPath(item.path)) {
+                try {
+                    await this.app.vault.create(item.path, "");
+                } catch (error) {
+                    console.error("Failed to create default db file:", item.path, error);
+                }
+            }
+
+            this.settings[item.key] = item.path;
+            settingsUpdated = true;
+        }
+
+        if (settingsUpdated) {
+            await this.saveSettings();
+        }
+    }
+
     async replacePDF() {
         if (await app.vault.adapter.exists(
             ".obsidian/plugins/obsidian-language-learner/pdf/web/viewer.html"
@@ -268,6 +302,19 @@ export default class LanguageLearner extends Plugin {
                 modal.open();
             },
         });
+
+        this.addCommand({
+            id: "langr-mark-learning-completed",
+            name: t("Mark as Learning Completed"),
+            callback: async () => {
+                const file = this.app.workspace.getActiveFile();
+                if (!file) {
+                    new Notice(t("No active file"));
+                    return;
+                }
+                await this.markLearningCompleted(file);
+            },
+        });
     }
 
     registerCustomViews() {
@@ -332,6 +379,57 @@ export default class LanguageLearner extends Plugin {
             //popstate: true,
         } as ViewState);
 
+    }
+
+    private extractArticleContent(content: string): string {
+        const withoutFrontmatter = content.replace(/^\n*---\n[\s\S]+?\n---\n?/, "");
+        const lines = withoutFrontmatter.split("\n");
+        const articleStart = lines.indexOf("^^^article");
+        if (articleStart === -1) {
+            return withoutFrontmatter;
+        }
+
+        const sectionEndCandidates = [lines.indexOf("^^^words"), lines.indexOf("^^^notes")]
+            .filter((index) => index > articleStart);
+        const articleEnd = sectionEndCandidates.length > 0
+            ? Math.min(...sectionEndCandidates)
+            : lines.length;
+
+        return lines.slice(articleStart + 1, articleEnd).join("\n");
+    }
+
+    async getWordsCountForFile(filePath: string): Promise<number> {
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile)) {
+            return 0;
+        }
+
+        const content = await this.app.vault.cachedRead(file);
+        const articleContent = this.extractArticleContent(content).trim();
+        if (!articleContent) {
+            return 0;
+        }
+
+        const expressions = await this.parser.getWordsPhrases(articleContent);
+        return expressions.filter((expr) => expr.status === 1 || expr.status === 2).length;
+    }
+
+    async markLearningCompleted(file: TFile): Promise<void> {
+        try {
+            const wordsCollected = await this.getWordsCountForFile(file.path);
+            const frontmatter = await this.frontManager.loadFrontMatter(file);
+            const completedDate = new Date().toISOString().split("T")[0];
+
+            frontmatter.status = "completed";
+            frontmatter.completed = completedDate;
+            frontmatter.words_collected = String(wordsCollected);
+
+            await this.frontManager.storeFrontMatter(file, frontmatter);
+            new Notice(`${t("Marked as completed")} (${wordsCollected})`);
+        } catch (error) {
+            console.error("Failed to update status:", error);
+            new Notice(`${t("Failed to update status")}: ${(error as Error).message}`);
+        }
     }
 
     async refreshTextDB() {

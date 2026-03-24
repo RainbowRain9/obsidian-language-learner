@@ -9,6 +9,10 @@ export default {
     "Search word": "查詢單字/片語",
     "Refresh Word Database": "重新整理單字資料庫",
     "Refresh Review Database": "重新整理復習資料庫",
+    "Mark as Learning Completed": "標記為學習完成",
+    "No active file": "沒有活動檔案",
+    "Marked as completed": "已標記為學習完成",
+    "Failed to update status": "更新狀態失敗",
 
     // DataPanelView.ts
     "Data Panel": "單字列表",

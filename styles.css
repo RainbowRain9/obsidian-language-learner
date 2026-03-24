@@ -1324,5 +1324,34 @@
 .is-mobile #popup-search .pop-body #langr-search {
   max-height: 300px;
 }
+.langr-toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  box-shadow: 0 6px 18px #0003;
+  pointer-events: none;
+}
+.langr-toast--success {
+  background: #1f883d26;
+  border-color: #1f883d80;
+  color: #b7f5c4;
+}
+.langr-toast--error {
+  background: #dc262626;
+  border-color: #dc262680;
+  color: #fecaca;
+}
+.langr-toast--info {
+  background: #3b82f626;
+  border-color: #3b82f666;
+  color: #bfdbfe;
+}
 
 /* src/main.css */

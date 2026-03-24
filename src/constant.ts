@@ -25,6 +25,11 @@ interface EventMap extends GlobalEventHandlersEventMap {
         aliases: string[],
     }>;
     "obsidian-langr-refresh-stat": CustomEvent<{}>;
+    "obsidian-langr-toast": CustomEvent<{
+        message: string,
+        type?: "info" | "success" | "error",
+        duration?: number,
+    }>;
 }
 
 

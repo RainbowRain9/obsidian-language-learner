@@ -9,6 +9,10 @@ export default {
     "Search word": "查找单词/短语",
     "Refresh Word Database": "刷新单词数据库",
     "Refresh Review Database": "刷新复习数据库",
+    "Mark as Learning Completed": "标记为学习完成",
+    "No active file": "没有活动文件",
+    "Marked as completed": "已标记为学习完成",
+    "Failed to update status": "更新状态失败",
 
     // DataPanelView.ts
     "Data Panel": "单词列表",

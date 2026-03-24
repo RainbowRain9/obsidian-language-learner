@@ -9,6 +9,10 @@ export default {
     "Search word": "Search word",
     "Refresh Word Database": "Refresh Word Database",
     "Refresh Review Database": "Refresh Review Database",
+    "Mark as Learning Completed": "Mark as Learning Completed",
+    "No active file": "No active file",
+    "Marked as completed": "Marked as completed",
+    "Failed to update status": "Failed to update status",
 
     // DataPanelView.ts
     "Data Panel": "Data Panel",

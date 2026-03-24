@@ -863,6 +863,7 @@ watch(renderedText, () => {
 
 // 添加无视单词
 async function addIgnores() {
+    const isLastPage = page.value * pageSize.value >= totalLines;
     let ignores = contentEl.querySelectorAll(
         ".word.new"
     ) as unknown as HTMLElement[];
@@ -875,8 +876,13 @@ async function addIgnores() {
     refreshHandle.value = !refreshHandle.value;
     dispatchEvent(new CustomEvent("obsidian-langr-refresh-stat"));
 
-    if (page.value * pageSize.value < totalLines) {
+    if (!isLastPage) {
         page.value++;
+    } else {
+        const activeFile = view.file ?? plugin.app.workspace.getActiveFile();
+        if (activeFile) {
+            await plugin.markLearningCompleted(activeFile);
+        }
     }
 
     refreshCount();
