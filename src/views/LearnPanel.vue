@@ -417,17 +417,17 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const normalized = selection.toLowerCase();
 	const exprType = selection.includes(" ") ? "PHRASE" : "WORD";
 	const target = evt.detail.target as HTMLElement;
-	let sentenceText = "";
-	let defaultOrigin: string = null;
+	let sentenceText = ((evt.detail.sentenceText as string) || "").trim();
+	let defaultOrigin: string = (evt.detail.origin as string) || null;
 
-	if (target) {
+	if (!sentenceText && target) {
 		let sentenceEl = target.parentElement?.hasClass("stns")
 			? target.parentElement
 			: target.parentElement?.parentElement;
 		sentenceText = sentenceEl?.textContent || "";
 
 		let reading = view.app.workspace.getActiveViewOfType(ReadingView);
-		if (reading) {
+		if (reading && !defaultOrigin) {
 			let presetOrigin = view.app.metadataCache.getFileCache(reading.file)
 				.frontmatter["langr-origin"];
 			defaultOrigin = presetOrigin ? presetOrigin : reading.file.name;

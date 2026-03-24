@@ -1,6 +1,9 @@
 import esbuild from "esbuild";
+import fs from "fs/promises";
+import { watchFile } from "fs";
+import path from "path";
 import process from "process";
-import builtins from 'builtin-modules';
+import builtins from "builtin-modules";
 import vue from "@the_tree/esbuild-plugin-vue3";
 
 const banner =
@@ -10,7 +13,41 @@ if you want to view the source, please visit the github repository of this plugi
 */
 `;
 
-const prod = (process.argv[2] === 'production');
+const prod = process.argv[2] === "production";
+const rootDir = process.cwd();
+const outputDir = path.join(rootDir, ".build", "plugin");
+const bundlePath = path.join(outputDir, "main.js");
+const stylesEntryPath = path.join(rootDir, ".build", "styles.entry.css");
+const stylesOutputPath = path.join(outputDir, "styles.css");
+const manifestSourcePath = path.join(rootDir, "manifest.json");
+const manifestOutputPath = path.join(outputDir, "manifest.json");
+
+const normalizeImportPath = (filePath) => filePath.split(path.sep).join("/");
+
+async function ensureOutputDir() {
+    await fs.mkdir(outputDir, { recursive: true });
+}
+
+async function syncManifest() {
+    await fs.copyFile(manifestSourcePath, manifestOutputPath);
+}
+
+async function writeStylesEntry() {
+    const stalinPath = normalizeImportPath(
+        path.relative(path.dirname(stylesEntryPath), path.join(rootDir, "src", "stalin.css"))
+    );
+    const pluginCssPath = normalizeImportPath(
+        path.relative(path.dirname(stylesEntryPath), path.join(outputDir, "main.css"))
+    );
+    const content = `@import "${stalinPath}";\n@import "${pluginCssPath}";\n`;
+    await fs.writeFile(stylesEntryPath, content, "utf8");
+}
+
+async function prepareBuildArtifacts() {
+    await ensureOutputDir();
+    await syncManifest();
+    await writeStylesEntry();
+}
 
 const buildOptions = {
     banner: {
@@ -19,62 +56,71 @@ const buildOptions = {
     plugins: [
         vue({ isProd: true }),
     ],
-    entryPoints: ['./src/plugin.ts'],
+    entryPoints: ["./src/plugin.ts"],
     bundle: true,
     external: [
-        'obsidian',
-        'electron',
-        '@codemirror/autocomplete',
-        '@codemirror/closebrackets',
-        '@codemirror/collab',
-        '@codemirror/commands',
-        '@codemirror/comment',
-        '@codemirror/fold',
-        '@codemirror/gutter',
-        '@codemirror/highlight',
-        '@codemirror/history',
-        '@codemirror/language',
-        '@codemirror/lint',
-        '@codemirror/matchbrackets',
-        '@codemirror/panel',
-        '@codemirror/rangeset',
-        '@codemirror/rectangular-selection',
-        '@codemirror/search',
-        '@codemirror/state',
-        '@codemirror/stream-parser',
-        '@codemirror/text',
-        '@codemirror/tooltip',
-        '@codemirror/view',
-        ...builtins],
-    format: 'cjs',
-    target: 'es2016',
+        "obsidian",
+        "electron",
+        "@codemirror/autocomplete",
+        "@codemirror/closebrackets",
+        "@codemirror/collab",
+        "@codemirror/commands",
+        "@codemirror/comment",
+        "@codemirror/fold",
+        "@codemirror/gutter",
+        "@codemirror/highlight",
+        "@codemirror/history",
+        "@codemirror/language",
+        "@codemirror/lint",
+        "@codemirror/matchbrackets",
+        "@codemirror/panel",
+        "@codemirror/rangeset",
+        "@codemirror/rectangular-selection",
+        "@codemirror/search",
+        "@codemirror/state",
+        "@codemirror/stream-parser",
+        "@codemirror/text",
+        "@codemirror/tooltip",
+        "@codemirror/view",
+        ...builtins,
+    ],
+    format: "cjs",
+    target: "es2016",
     logLevel: "info",
-    sourcemap: prod ? false : 'inline',
+    sourcemap: prod ? false : "inline",
     minify: prod ? true : false,
     treeShaking: true,
-    outfile: 'main.js',
+    outfile: bundlePath,
 };
 
 const cssOptions = {
-    entryPoints: ["./src/main.css"],
-    outfile: "styles.css",
+    entryPoints: [stylesEntryPath],
+    outfile: stylesOutputPath,
     bundle: true,
     allowOverwrite: true,
     minify: false,
+    logLevel: "info",
 };
 
 if (prod) {
+    await prepareBuildArtifacts();
     await esbuild.build(buildOptions).catch(() => process.exit(1));
     await esbuild.build(cssOptions).catch(() => process.exit(1));
 } else {
-    const ctx = await esbuild.context(buildOptions);
-    await ctx.watch();
-    const cssCtx = await esbuild.context(cssOptions);
-    await cssCtx.watch();
-}
+    await prepareBuildArtifacts();
 
-// if (!prod) {
-// 	fs.rm("./main.css", () => {
-// 		console.log("Build completed successfully.")
-// 	})
-// }
+    const ctx = await esbuild.context(buildOptions);
+    await ctx.rebuild();
+
+    const cssCtx = await esbuild.context(cssOptions);
+    await cssCtx.rebuild();
+
+    await ctx.watch();
+    await cssCtx.watch();
+
+    watchFile(manifestSourcePath, { interval: 500 }, () => {
+        void syncManifest().catch((error) => {
+            console.error("Failed to sync manifest.json:", error);
+        });
+    });
+}

@@ -5,18 +5,18 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## 项目概览
 
 - 这是一个 Obsidian 插件：Language Learner。核心能力是查词、AI 释义 / 翻译、单词采集、阅读模式和学习统计。
-- 发布产物直接输出到仓库根目录，而不是 `dist/`：`main.js`、`styles.css`、`manifest.json`。
+- 构建产物输出到 `.build/plugin/`：`main.js`、`styles.css`、`manifest.json`。
 - `manifest.json` 才是插件元数据的权威来源；`package.json.name` 仍然是 Obsidian sample plugin 的旧值，不要把它当成真实插件 ID。
 
 ## 常用命令
 
 - `npm install`：安装依赖。
-- `npm run dev`：启动 esbuild watch，入口是 `src/plugin.ts`，输出 `main.js`；同时把 `src/main.css` 打包为 `styles.css`。
+- `npm run dev`：启动 esbuild watch，入口是 `src/plugin.ts`，持续更新 `.build/plugin/` 下的插件产物。
 - `npm run build`：先执行 `tsc -noEmit -skipLibCheck`，再执行生产构建。
 - `npx tsc -noEmit -skipLibCheck`：仅做 TypeScript 检查；这是 `npm run build` 的前置检查步骤。
-- `node esbuild.config.mjs production`：只做生产打包，不运行 TypeScript 检查。
-- `npm run version`：根据 `package.json.version` 更新 `manifest.json` 和 `versions.json`。
-- `npm run pub -- <version>`：执行发布脚本；它会修改 `manifest.json`、提交、`git push`、打 tag 并推送 tag，不是普通本地开发命令。
+- `node esbuild.config.mjs production`：只做生产打包到 `.build/plugin/`，不运行 TypeScript 检查。
+- `npm version <patch|minor|major>` 或 `npm run release:version -- <x.y.z>`：发布入口；会更新 `package.json` / `package-lock.json`，并触发 `version` 生命周期脚本同步 `manifest.json` 和 `versions.json`。
+- `npm run release:push`：执行 `git push --follow-tags`，用于把 release commit 和 tag 一起推送到 GitHub。
 
 ## 测试与 lint 现状
 

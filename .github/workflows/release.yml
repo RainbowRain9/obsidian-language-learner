@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      BUILD_DIR: .build/plugin
+      RELEASE_DIR: .build/release
+      PLUGIN_ID: obsidian-language-learner
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "tag_version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=${PLUGIN_ID}-${TAG_VERSION}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          TAG_VERSION="${{ steps.meta.outputs.tag_version }}"
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PACKAGE_VERSION)." >&2
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match manifest.json version ($MANIFEST_VERSION)." >&2
+            exit 1
+          fi
+
+          node -e "const versions=require('./versions.json'); const version=process.argv[1]; if(!versions[version]) { console.error(\`versions.json is missing release entry for ${version}.\`); process.exit(1); }" "$TAG_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          mkdir -p "$RELEASE_DIR"
+          cp "$BUILD_DIR/main.js" "$RELEASE_DIR/main.js"
+          cp "$BUILD_DIR/manifest.json" "$RELEASE_DIR/manifest.json"
+          cp "$BUILD_DIR/styles.css" "$RELEASE_DIR/styles.css"
+          zip -j "$RELEASE_DIR/${{ steps.meta.outputs.zip_name }}" \
+            "$BUILD_DIR/main.js" \
+            "$BUILD_DIR/manifest.json" \
+            "$BUILD_DIR/styles.css"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.meta.outputs.tag_version }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            .build/release/main.js
+            .build/release/manifest.json
+            .build/release/styles.css
+            .build/release/${{ steps.meta.outputs.zip_name }}

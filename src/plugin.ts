@@ -32,7 +32,7 @@ import { FrontMatterManager } from "./utils/frontmatter";
 import { DEFAULT_SETTINGS, MyPluginSettings, SettingTab } from "./settings";
 import store from "./store";
 import { playAudio } from "./utils/helpers";
-import type { Position } from "./constant";
+import type { Position, SearchContext } from "./constant";
 import { InputModal } from "./modals"
 
 import Global from "./views/Global.vue";
@@ -288,7 +288,7 @@ export default class LanguageLearner extends Plugin {
             id: "langr-search-word-select",
             name: t("Translate Select"),
             callback: () => {
-                let selection = window.getSelection().toString().trim();
+                let selection = this.getActiveSelectionText();
                 this.queryWord(selection);
             },
         });
@@ -674,19 +674,131 @@ export default class LanguageLearner extends Plugin {
         );
     };
 
+    private normalizeContextText(text?: string | null): string {
+        return (text || "").replace(/\s+/g, " ").trim();
+    }
+
+    private getActiveSelectionText(): string {
+        const domSelection = this.normalizeContextText(window.getSelection()?.toString());
+        if (domSelection) {
+            return domSelection;
+        }
+
+        const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
+        return this.normalizeContextText(editor?.getSelection() || "");
+    }
+
+    private getSearchOrigin(): string | null {
+        const reading = this.app.workspace.getActiveViewOfType(ReadingView);
+        const file = reading?.file || this.app.workspace.getActiveFile();
+        if (!file) {
+            return null;
+        }
+
+        const presetOrigin = this.app.metadataCache.getFileCache(file)?.frontmatter?.["langr-origin"];
+        return presetOrigin ? presetOrigin : file.name;
+    }
+
+    private extractSentenceFromText(text: string, selection: string): string {
+        const normalizedText = this.normalizeContextText(text);
+        const normalizedSelection = this.normalizeContextText(selection);
+        if (!normalizedText) {
+            return "";
+        }
+        if (!normalizedSelection) {
+            return normalizedText;
+        }
+
+        const loweredSelection = normalizedSelection.toLowerCase();
+        const segments = normalizedText
+            .split(/(?<=[.!?。！？])\s+|\n+/)
+            .map((segment) => this.normalizeContextText(segment))
+            .filter(Boolean);
+
+        const matched = segments.find((segment) =>
+            segment.toLowerCase().includes(loweredSelection)
+        );
+
+        return matched || normalizedText;
+    }
+
+    private getSentenceFromDomSelection(selection: string, target?: HTMLElement): string {
+        const blockSelector = ".stns, p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, .cm-line";
+        const targetBlock = target?.closest?.(blockSelector);
+        const targetText = this.normalizeContextText(targetBlock?.textContent || "");
+        if (targetText) {
+            return this.extractSentenceFromText(targetText, selection);
+        }
+
+        const domSelection = window.getSelection();
+        if (!domSelection || domSelection.rangeCount === 0) {
+            return "";
+        }
+
+        const range = domSelection.getRangeAt(0);
+        const node = range.commonAncestorContainer;
+        const element = node instanceof HTMLElement ? node : node.parentElement;
+        const block = element?.closest?.(blockSelector);
+        const blockText = this.normalizeContextText(block?.textContent || "");
+        return blockText ? this.extractSentenceFromText(blockText, selection) : "";
+    }
+
+    private getSentenceFromEditorSelection(selection: string): string {
+        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const editor = markdownView?.editor;
+        if (!editor) {
+            return "";
+        }
+
+        const editorSelection = this.normalizeContextText(editor.getSelection());
+        if (!editorSelection || editorSelection !== selection) {
+            return "";
+        }
+
+        const from = editor.getCursor("from");
+        const to = editor.getCursor("to");
+        const lines: string[] = [];
+        for (let line = from.line; line <= to.line; line++) {
+            lines.push(editor.getLine(line));
+        }
+
+        return this.extractSentenceFromText(lines.join(" "), selection);
+    }
+
+    private buildSearchContext(selection: string, target?: HTMLElement): SearchContext {
+        const normalizedSelection = this.normalizeContextText(selection);
+        if (!normalizedSelection) {
+            return {};
+        }
+
+        const sentenceText =
+            this.getSentenceFromDomSelection(normalizedSelection, target) ||
+            this.getSentenceFromEditorSelection(normalizedSelection);
+
+        if (!sentenceText) {
+            return {};
+        }
+
+        return {
+            sentenceText,
+            origin: this.getSearchOrigin(),
+        };
+    }
+
     async queryWord(word: string, target?: HTMLElement, evtPosition?: Position): Promise<void> {
         if (!word) return;
+        const searchContext = this.buildSearchContext(word, target);
 
         if (!this.settings.popup_search) {
             await this.activateView(SEARCH_PANEL_VIEW, "left");
         }
 
-        if (target && Platform.isDesktopApp) {
+        if (searchContext.sentenceText && Platform.isDesktopApp) {
             await this.activateView(LEARN_PANEL_VIEW, "right");
         }
 
         dispatchEvent(new CustomEvent('obsidian-langr-search', {
-            detail: { selection: word, target, evtPosition }
+            detail: { selection: word, target, evtPosition, ...searchContext }
         }));
 
         if (this.settings.auto_pron) {
@@ -752,7 +864,7 @@ export default class LanguageLearner extends Plugin {
                 if (!selection) return;
 
                 evt.stopImmediatePropagation();
-                this.queryWord(selection, null, { x: evt.pageX, y: evt.pageY });
+                this.queryWord(selection, target, { x: evt.pageX, y: evt.pageY });
                 return;
             }
         });
