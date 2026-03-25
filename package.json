@@ -18,7 +18,7 @@
         "release:major:push": "node scripts/release-and-push.mjs major",
         "release:version:push": "node scripts/release-and-push.mjs",
         "pub": "node publish.mjs",
-        "version": "node version-bump.mjs && git add manifest.json versions.json"
+        "version": "node version-bump.mjs && git add manifest.json versions.json CHANGELOG.md"
     },
     "keywords": [],
     "author": "",
