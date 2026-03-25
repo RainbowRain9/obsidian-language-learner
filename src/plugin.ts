@@ -678,14 +678,57 @@ export default class LanguageLearner extends Plugin {
         return (text || "").replace(/\s+/g, " ").trim();
     }
 
+    sanitizeSentenceContext(text?: string | null): string {
+        let cleaned = text || "";
+        if (!cleaned) {
+            return "";
+        }
+
+        cleaned = cleaned
+            .replace(/<[^>]+>/g, " ")
+            .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+            .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+            .replace(/\[\[([^\]]+)\]\]/g, "$1")
+            .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+            .replace(/\\([\\`*_{}\[\]()#+.!|>~-])/g, "$1")
+            .replace(/[*_~#>`]/g, " ")
+            .replace(/\|/g, " ");
+
+        cleaned = cleaned
+            .replace(/[（(]([^()（）]*[\u4e00-\u9fff][^()（）]*)[）)]/g, (_match, inner: string) => {
+                const preserved = inner
+                    .replace(/[\u4e00-\u9fff，。；：！？、【】《》「」『』“”‘’…·\s]+/g, " ")
+                    .replace(/\s+([,.;:!?])/g, "$1")
+                    .trim();
+                return /[A-Za-z0-9]/.test(preserved) ? ` ${preserved} ` : " ";
+            })
+            .replace(/\s*[-—–:：]\s*[\u4e00-\u9fff，。；：！？、（）【】《》「」『』“”‘’…·.\s]+(?:\s*[-—–:：]\s*)?(?=[A-Za-z(])/g, " ")
+            .replace(/\s*[-—–:：]\s*[\u4e00-\u9fff，。；：！？、（）【】《》「」『』“”‘’\s]+(?=$|[.,;!?])/g, " ");
+
+        if (/[A-Za-z]/.test(cleaned)) {
+            cleaned = cleaned
+                .replace(/[\u4e00-\u9fff]+/g, " ")
+                .replace(/[，。；：！？、（）【】《》「」『』“”‘’]/g, " ");
+        }
+
+        return this.normalizeContextText(cleaned)
+            .replace(/(?<=[A-Za-z])\s*(?:\.{2,}|…+)\s*(?=[A-Za-z])/g, " ")
+            .replace(/[（(]\s*[）)]/g, " ")
+            .replace(/\s*[-—–:：]\s*(?=$|[.,;!?])/g, " ")
+            .replace(/\s+([,.;:!?])/g, "$1")
+            .replace(/([(\[{])\s+/g, "$1")
+            .replace(/\s+([)\]}])/g, "$1");
+    }
+
     private getActiveSelectionText(): string {
-        const domSelection = this.normalizeContextText(window.getSelection()?.toString());
+        const domSelection = this.sanitizeSentenceContext(window.getSelection()?.toString());
         if (domSelection) {
             return domSelection;
         }
 
         const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
-        return this.normalizeContextText(editor?.getSelection() || "");
+        return this.sanitizeSentenceContext(editor?.getSelection() || "");
     }
 
     private getSearchOrigin(): string | null {
@@ -699,9 +742,75 @@ export default class LanguageLearner extends Plugin {
         return presetOrigin ? presetOrigin : file.name;
     }
 
+    private shouldSplitSentenceAt(text: string, index: number): boolean {
+        const char = text[index];
+        if (!/[.!?。！？]/.test(char)) {
+            return false;
+        }
+
+        // 避免在 "...", ".." 这类省略号或注释片段中误断句。
+        if (char === ".") {
+            const prev = text[index - 1] || "";
+            const next = text[index + 1] || "";
+            if (prev === "." || next === ".") {
+                return false;
+            }
+        }
+
+        let cursor = index + 1;
+        while (cursor < text.length && /\s/.test(text[cursor])) {
+            cursor++;
+        }
+        if (cursor >= text.length) {
+            return true;
+        }
+
+        const rest = text.slice(cursor);
+        return /^[\"'“‘(\[]?[A-Z0-9]/.test(rest) || /^[\"'“‘(\[]?[\u4e00-\u9fff]/.test(rest);
+    }
+
+    private splitSentenceCandidates(text: string): string[] {
+        const segments: string[] = [];
+        let start = 0;
+
+        for (let index = 0; index < text.length; index++) {
+            const char = text[index];
+            if (char === "\n") {
+                const segment = this.normalizeContextText(text.slice(start, index));
+                if (segment) {
+                    segments.push(segment);
+                }
+                start = index + 1;
+                continue;
+            }
+
+            if (!this.shouldSplitSentenceAt(text, index)) {
+                continue;
+            }
+
+            const segment = this.normalizeContextText(text.slice(start, index + 1));
+            if (segment) {
+                segments.push(segment);
+            }
+
+            start = index + 1;
+            while (start < text.length && /\s/.test(text[start])) {
+                start++;
+            }
+            index = start - 1;
+        }
+
+        const tail = this.normalizeContextText(text.slice(start));
+        if (tail) {
+            segments.push(tail);
+        }
+
+        return segments;
+    }
+
     private extractSentenceFromText(text: string, selection: string): string {
-        const normalizedText = this.normalizeContextText(text);
-        const normalizedSelection = this.normalizeContextText(selection);
+        const normalizedText = this.sanitizeSentenceContext(text);
+        const normalizedSelection = this.sanitizeSentenceContext(selection);
         if (!normalizedText) {
             return "";
         }
@@ -710,10 +819,7 @@ export default class LanguageLearner extends Plugin {
         }
 
         const loweredSelection = normalizedSelection.toLowerCase();
-        const segments = normalizedText
-            .split(/(?<=[.!?。！？])\s+|\n+/)
-            .map((segment) => this.normalizeContextText(segment))
-            .filter(Boolean);
+        const segments = this.splitSentenceCandidates(normalizedText);
 
         const matched = segments.find((segment) =>
             segment.toLowerCase().includes(loweredSelection)
@@ -725,7 +831,7 @@ export default class LanguageLearner extends Plugin {
     private getSentenceFromDomSelection(selection: string, target?: HTMLElement): string {
         const blockSelector = ".stns, p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, .cm-line";
         const targetBlock = target?.closest?.(blockSelector);
-        const targetText = this.normalizeContextText(targetBlock?.textContent || "");
+        const targetText = this.sanitizeSentenceContext(targetBlock?.textContent || "");
         if (targetText) {
             return this.extractSentenceFromText(targetText, selection);
         }
@@ -739,7 +845,7 @@ export default class LanguageLearner extends Plugin {
         const node = range.commonAncestorContainer;
         const element = node instanceof HTMLElement ? node : node.parentElement;
         const block = element?.closest?.(blockSelector);
-        const blockText = this.normalizeContextText(block?.textContent || "");
+        const blockText = this.sanitizeSentenceContext(block?.textContent || "");
         return blockText ? this.extractSentenceFromText(blockText, selection) : "";
     }
 
@@ -750,7 +856,7 @@ export default class LanguageLearner extends Plugin {
             return "";
         }
 
-        const editorSelection = this.normalizeContextText(editor.getSelection());
+        const editorSelection = this.sanitizeSentenceContext(editor.getSelection());
         if (!editorSelection || editorSelection !== selection) {
             return "";
         }
@@ -766,7 +872,7 @@ export default class LanguageLearner extends Plugin {
     }
 
     private buildSearchContext(selection: string, target?: HTMLElement): SearchContext {
-        const normalizedSelection = this.normalizeContextText(selection);
+        const normalizedSelection = this.sanitizeSentenceContext(selection);
         if (!normalizedSelection) {
             return {};
         }
@@ -786,8 +892,9 @@ export default class LanguageLearner extends Plugin {
     }
 
     async queryWord(word: string, target?: HTMLElement, evtPosition?: Position): Promise<void> {
-        if (!word) return;
-        const searchContext = this.buildSearchContext(word, target);
+        const normalizedWord = this.sanitizeSentenceContext(word);
+        if (!normalizedWord) return;
+        const searchContext = this.buildSearchContext(normalizedWord, target);
 
         if (!this.settings.popup_search) {
             await this.activateView(SEARCH_PANEL_VIEW, "left");
@@ -798,14 +905,14 @@ export default class LanguageLearner extends Plugin {
         }
 
         dispatchEvent(new CustomEvent('obsidian-langr-search', {
-            detail: { selection: word, target, evtPosition, ...searchContext }
+            detail: { selection: normalizedWord, target, evtPosition, ...searchContext }
         }));
 
         if (this.settings.auto_pron) {
             let accent = this.settings.review_prons;
             let wordUrl =
                 `http://dict.youdao.com/dictvoice?type=${accent}&audio=` +
-                encodeURIComponent(word);
+                encodeURIComponent(normalizedWord);
             playAudio(wordUrl);
         }
     }

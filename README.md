@@ -263,20 +263,20 @@ package.json.version
 #### 自动递增版本
 
 ```bash
-npm run release:patch
+npm run release:patch:push
 ```
 
 或：
 
 ```bash
-npm run release:minor
-npm run release:major
+npm run release:minor:push
+npm run release:major:push
 ```
 
 #### 指定版本号
 
 ```bash
-npm run release:version -- 0.5.1
+npm run release:version:push -- 0.5.1
 ```
 
 上面的命令会自动：
@@ -285,20 +285,16 @@ npm run release:version -- 0.5.1
 2. 通过 `version` 脚本同步 `manifest.json` 和 `versions.json`
 3. 创建 release commit
 4. 创建对应 tag
-
-然后执行：
-
-```bash
-npm run release:push
-```
-
-它等价于：
-
-```bash
-git push --follow-tags
-```
+5. 执行 `git push --follow-tags`
 
 最后等待 GitHub Actions 自动完成 Release。
+
+如果你想手动拆开执行，底层命令仍然可用：
+
+```bash
+npm run release:patch
+npm run release:push
+```
 
 ## 📁 项目结构
 

@@ -322,6 +322,7 @@ async function submit() {
 	}
 	let data = JSON.parse(JSON.stringify(model.value));
 	(data as any).expression = (data as any).expression.trim().toLowerCase();
+	(data as any).sentences = dedupeSentences((data as any).sentences || []);
 	// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
 	
 	let statusCode = await plugin.db.postExpression(data);
@@ -408,6 +409,46 @@ function extractGoogleTranslation(res: any): string {
 	return text ? decodeHtmlEntities(text) : "";
 }
 
+function sanitizeSentenceText(text?: string | null): string {
+	return plugin.sanitizeSentenceContext(text);
+}
+
+function sanitizeSentenceRecord(sentence: Sentence | null): Sentence | null {
+	if (!sentence) return null;
+	const text = sanitizeSentenceText(sentence.text);
+	if (!text) return null;
+	return {
+		...sentence,
+		text,
+	};
+}
+
+function dedupeSentences(sentences: Sentence[] = []): Sentence[] {
+	const merged = new Map<string, Sentence>();
+	sentences.forEach((sentence) => {
+		const sanitized = sanitizeSentenceRecord(sentence);
+		if (!sanitized) return;
+
+		const existing = merged.get(sanitized.text);
+		if (!existing) {
+			merged.set(sanitized.text, { ...sanitized });
+			return;
+		}
+
+		if (!existing.trans && sanitized.trans) {
+			existing.trans = sanitized.trans;
+		}
+		if (!existing.origin && sanitized.origin) {
+			existing.origin = sanitized.origin;
+		}
+	});
+	return [...merged.values()];
+}
+
+function normalizeCurrentModelSentences() {
+	model.value.sentences = dedupeSentences(model.value.sentences || []);
+}
+
 // 查询词汇时自动填充新词表单
 useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const selectionRaw = (evt.detail.selection as string) || "";
@@ -417,14 +458,14 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const normalized = selection.toLowerCase();
 	const exprType = selection.includes(" ") ? "PHRASE" : "WORD";
 	const target = evt.detail.target as HTMLElement;
-	let sentenceText = ((evt.detail.sentenceText as string) || "").trim();
+	let sentenceText = sanitizeSentenceText((evt.detail.sentenceText as string) || "");
 	let defaultOrigin: string = (evt.detail.origin as string) || null;
 
 	if (!sentenceText && target) {
 		let sentenceEl = target.parentElement?.hasClass("stns")
 			? target.parentElement
 			: target.parentElement?.parentElement;
-		sentenceText = sentenceEl?.textContent || "";
+		sentenceText = sanitizeSentenceText(sentenceEl?.textContent || "");
 
 		let reading = view.app.workspace.getActiveViewOfType(ReadingView);
 		if (reading && !defaultOrigin) {
@@ -479,8 +520,9 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	void (async () => {
 		const expr = await exprPromise;
 		if (!expr || !isCurrent()) return;
+		expr.sentences = dedupeSentences(expr.sentences);
 
-		const storedSen: Sentence = await storedSenPromise;
+		const storedSen = sanitizeSentenceRecord(await storedSenPromise);
 		if (!isCurrent()) return;
 
 		if (sentenceText) {
@@ -500,6 +542,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 			}
 		}
 
+		expr.sentences = dedupeSentences(expr.sentences);
 		model.value = expr;
 		if (expr.aliases && expr.aliases.length > 0) {
 			model.value.aliases = expr.aliases.join(",");
@@ -582,8 +625,9 @@ const toggleTrans = async (index: number, element: any) => {
 
 // 监听单词变化，重置状态
 watch(() => model.value, () => {
+	normalizeCurrentModelSentences();
     translationTypes.value = {};
-});
+}, { immediate: true });
 
 </script>
 

@@ -13,6 +13,10 @@
         "release:minor": "npm version minor -m \"chore(release): 发布 %s\"",
         "release:major": "npm version major -m \"chore(release): 发布 %s\"",
         "release:push": "node publish.mjs",
+        "release:patch:push": "node scripts/release-and-push.mjs patch",
+        "release:minor:push": "node scripts/release-and-push.mjs minor",
+        "release:major:push": "node scripts/release-and-push.mjs major",
+        "release:version:push": "node scripts/release-and-push.mjs",
         "pub": "node publish.mjs",
         "version": "node version-bump.mjs && git add manifest.json versions.json"
     },
