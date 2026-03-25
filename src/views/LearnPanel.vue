@@ -164,10 +164,11 @@ import {
 import { ExpressionInfo, Sentence } from "@/db/interface";
 import { t } from "@/lang/helper";
 import { useEvent } from "@/utils/use";
+import { analyzeWordSelection } from "@/utils/word-analysis";
 import { LearnPanelView } from "./LearnPanelView";
 import { ReadingView } from "./ReadingView";
 import Plugin from "@/plugin";
-import { search as youdaoSearch } from "@dict/youdao/engine";
+import { search as youdaoSearch, YoudaoResultLex } from "@dict/youdao/engine";
 import { search as googleTranslate } from "@dict/google/engine";
 import { translate as aiTranslate } from "@dict/ai/engine";
 import store from "@/store";
@@ -215,7 +216,7 @@ let model = ref<any>({
 	tags: [],
 	notes: [],
 	sentences: [],
-	aliases:null,
+	aliases: "",
     date: Date.now(),
 });
 
@@ -364,24 +365,14 @@ function clearPanel(){
 		tags: [],
 		notes: [],
 		sentences: [],
-		aliases:null,
+		aliases: "",
         date: Date.now(),
 	};
 };
 
-// Extract word forms from Youdao pattern string
-function extractWordForms(pattern: string): string[] {
-    if (!pattern) return [];
-    // Remove parentheses and split by space
-    // Pattern format: ( grabbing. grabbed. grabs )
-    return pattern
-        .replace(/[()]/g, '')
-        .split(/\s+/)
-        .map(s => s.replace(/\.$/, '')) // Remove trailing dot
-        .filter(s => s && /^[a-zA-Z]+$/.test(s)); // Only keep valid words
-}
-
 const selectionToken = ref(0);
+const GOOGLE_CONTEXT_MARKER_START = "[[";
+const GOOGLE_CONTEXT_MARKER_END = "]]";
 
 function decodeHtmlEntities(input: string): string {
 	const textarea = document.createElement("textarea");
@@ -400,13 +391,81 @@ function decodeHtmlEntities(input: string): string {
 function extractYoudaoTranslation(res: any): string {
 	if (!res || !(res.result as any)?.translation) return "";
 	const html = (res.result as any).translation as string;
-	const text = html.match(/<p>([^<>]+)<\/p>/g)?.[1]?.match(/<p>(.*)<\/p>/)?.[1] ?? "";
+	const container = document.createElement("div");
+	container.innerHTML = html;
+	const text = container.textContent?.replace(/\s+/g, " ").trim() || "";
 	return text ? decodeHtmlEntities(text) : "";
 }
 
 function extractGoogleTranslation(res: any): string {
 	const text = res?.result?.tgt?.trim?.() || "";
 	return text ? decodeHtmlEntities(text) : "";
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanMeaningText(text?: string | null): string {
+	return (text || "")
+		.replace(/\s+/g, " ")
+		.replace(/^[\s,，。；;:："“”"'‘’（）()【】\[\]\-]+/, "")
+		.replace(/[\s,，。；;:："“”"'‘’（）()【】\[\]\-]+$/, "")
+		.trim();
+}
+
+function wrapSelectionForContext(sentence: string, selection: string): string {
+	if (!sentence || !selection) return "";
+	const exactSelection = selection.trim();
+	const matcher = /^[a-z][a-z'-]*$/i.test(exactSelection)
+		? new RegExp(`\\b${escapeRegExp(exactSelection)}\\b`, "i")
+		: new RegExp(escapeRegExp(exactSelection), "i");
+	if (!matcher.test(sentence)) return "";
+	return sentence.replace(
+		matcher,
+		`${GOOGLE_CONTEXT_MARKER_START}$&${GOOGLE_CONTEXT_MARKER_END}`
+	);
+}
+
+function stripGoogleContextMarkers(text?: string | null): string {
+	return (text || "")
+		.split(GOOGLE_CONTEXT_MARKER_START).join("")
+		.split(GOOGLE_CONTEXT_MARKER_END).join("")
+		.trim();
+}
+
+function extractGoogleContextMeaning(text?: string | null): string {
+	const raw = text || "";
+	const matched = raw.match(/\[\[(.*?)\]\]/);
+	if (!matched?.[1]) return "";
+	return cleanMeaningText(decodeHtmlEntities(matched[1]));
+}
+
+async function translateMeaningWithContext(
+	selection: string,
+	sentenceText: string
+): Promise<{ sentenceTranslation: string; meaningTranslation: string }> {
+	let sentenceTranslation = "";
+	let meaningTranslation = "";
+
+	if (sentenceText) {
+		const markedSentence = wrapSelectionForContext(sentenceText, selection);
+		const sentenceRes = markedSentence
+			? await googleTranslate(markedSentence, plugin.settings).catch((): null => null)
+			: await googleTranslate(sentenceText, plugin.settings).catch((): null => null);
+		const translatedSentence = extractGoogleTranslation(sentenceRes);
+		sentenceTranslation = stripGoogleContextMarkers(translatedSentence);
+		if (markedSentence) {
+			meaningTranslation = extractGoogleContextMeaning(translatedSentence);
+		}
+	}
+
+	if (!meaningTranslation) {
+		const wordRes = await googleTranslate(selection, plugin.settings).catch((): null => null);
+		meaningTranslation = cleanMeaningText(extractGoogleTranslation(wordRes));
+	}
+
+	return { sentenceTranslation, meaningTranslation };
 }
 
 function sanitizeSentenceText(text?: string | null): string {
@@ -449,13 +508,42 @@ function normalizeCurrentModelSentences() {
 	model.value.sentences = dedupeSentences(model.value.sentences || []);
 }
 
+function mergeExpressionWithContext(
+	expr: ExpressionInfo,
+	sentenceText: string,
+	defaultOrigin: string,
+	storedSen: Sentence | null
+) {
+	const currentModel = model.value;
+	const nextSentences = dedupeSentences(expr.sentences || []);
+
+	if (sentenceText) {
+		if (!storedSen) {
+			nextSentences.push({
+				text: sentenceText,
+				trans: "",
+				origin: defaultOrigin,
+			});
+		} else if (!nextSentences.find((sen: Sentence) => sen.text === sentenceText)) {
+			nextSentences.push(storedSen);
+		}
+	}
+
+	model.value = {
+		...currentModel,
+		...expr,
+		meaning: expr.meaning || currentModel.meaning || "",
+		sentences: dedupeSentences([...(currentModel.sentences || []), ...nextSentences]),
+		aliases: expr.aliases?.length ? expr.aliases.join(",") : currentModel.aliases || "",
+	};
+}
+
 // 查询词汇时自动填充新词表单
 useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const selectionRaw = (evt.detail.selection as string) || "";
 	const selection = selectionRaw.trim();
 	if (!selection) return;
 	const token = ++selectionToken.value;
-	const normalized = selection.toLowerCase();
 	const exprType = selection.includes(" ") ? "PHRASE" : "WORD";
 	const target = evt.detail.target as HTMLElement;
 	let sentenceText = sanitizeSentenceText((evt.detail.sentenceText as string) || "");
@@ -508,56 +596,58 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		? plugin.db.tryGetSen(sentenceText).catch((): null => null)
 		: Promise.resolve(null);
 	const formsPromise = youdaoSearch(selection).catch((): null => null);
-	const translationPromise =
-		plugin.settings.use_machine_trans && sentenceText
-			? googleTranslate(sentenceText, plugin.settings).catch((): null => null)
-			: Promise.resolve(null);
+	const translationPromise = plugin.settings.use_machine_trans
+		? translateMeaningWithContext(selection, sentenceText).catch((): null => null)
+		: Promise.resolve(null);
 
-	const isCurrent = () =>
-		selectionToken.value === token &&
-		(model.value.expression || "").toString().trim().toLowerCase() === normalized;
+	const isCurrent = () => selectionToken.value === token;
+	let storedExpressionApplied = false;
 
 	void (async () => {
 		const expr = await exprPromise;
 		if (!expr || !isCurrent()) return;
-		expr.sentences = dedupeSentences(expr.sentences);
-
 		const storedSen = sanitizeSentenceRecord(await storedSenPromise);
 		if (!isCurrent()) return;
-
-		if (sentenceText) {
-			if (!storedSen) {
-				expr.sentences = expr.sentences.concat({
-					text: sentenceText,
-					trans: "",
-					origin: defaultOrigin,
-				});
-			} else {
-				let added = expr.sentences.find(
-					(sen: Sentence) => sen.text === sentenceText
-				);
-				if (!added) {
-					expr.sentences = expr.sentences.concat(storedSen);
-				}
-			}
-		}
-
-		expr.sentences = dedupeSentences(expr.sentences);
-		model.value = expr;
-		if (expr.aliases && expr.aliases.length > 0) {
-			model.value.aliases = expr.aliases.join(",");
-		}
+		storedExpressionApplied = true;
+		mergeExpressionWithContext(expr, sentenceText, defaultOrigin, storedSen);
 	})();
 
 	void (async () => {
 		const res = await formsPromise;
 		if (!isCurrent()) return;
-		if (model.value.aliases) return;
-		if (res && (res.result as any)?.pattern) {
-			const forms = extractWordForms((res.result as any).pattern);
-			const uniqueForms = [...new Set(forms)];
-			if (uniqueForms.length > 0) {
-				model.value.aliases = uniqueForms.join(", ");
+		const lex = res?.result && (res.result as any).type === "lex"
+			? (res.result as YoudaoResultLex)
+			: null;
+		const wordInfo = analyzeWordSelection(
+			selection,
+			lex?.title,
+			lex?.pattern
+		);
+
+		if (!storedExpressionApplied && wordInfo.baseExpression && model.value.t === "WORD") {
+			model.value.expression = wordInfo.baseExpression;
+		}
+
+		if (!model.value.aliases && wordInfo.aliases.length > 0) {
+			model.value.aliases = wordInfo.aliases.join(", ");
+		}
+
+		if (!model.value.meaning) {
+			const youdaoMeaning = extractYoudaoTranslation(res);
+			if (youdaoMeaning) {
+				model.value.meaning = cleanMeaningText(youdaoMeaning);
+			}
+		}
+
+		if (!storedExpressionApplied) {
+			for (const candidate of wordInfo.heuristicCandidates) {
+				const expr = await plugin.db.getExpression(candidate).catch((): null => null);
+				if (!expr || !isCurrent()) continue;
+				const storedSen = sanitizeSentenceRecord(await storedSenPromise);
+				if (!isCurrent()) return;
+				storedExpressionApplied = true;
+				mergeExpressionWithContext(expr, sentenceText, defaultOrigin, storedSen);
+				break;
 			}
 		}
 	})();
@@ -565,15 +655,16 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	void (async () => {
 		const res = await translationPromise;
 		if (!isCurrent()) return;
-		if (!sentenceText) return;
-		const filledTrans = extractGoogleTranslation(res);
-		if (!filledTrans) return;
+		if (res?.meaningTranslation && !model.value.meaning) {
+			model.value.meaning = res.meaningTranslation;
+		}
+		if (!sentenceText || !res?.sentenceTranslation) return;
 		const sentences = model.value.sentences || [];
 		const targetSen = sentences.find((sen: any) => sen.text === sentenceText);
 		if (targetSen && !targetSen.trans) {
-			targetSen.trans = filledTrans;
+			targetSen.trans = res.sentenceTranslation;
 			if (!translationCache.value[sentenceText]) translationCache.value[sentenceText] = {};
-			translationCache.value[sentenceText].machine = filledTrans;
+			translationCache.value[sentenceText].machine = res.sentenceTranslation;
 		}
 	})();
 });
