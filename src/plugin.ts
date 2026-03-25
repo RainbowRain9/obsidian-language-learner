@@ -1129,6 +1129,9 @@ export default class LanguageLearner extends Plugin {
         // 开始 frontmatter
         lines.push("---");
         lines.push(`expression: ${cont.expression}`);
+        if (cont.surface) {
+            lines.push(`surface: '${cont.surface.replace(/'/g, "''")}'`);
+        }
         lines.push(`meaning: '${cont.meaning}'`);
 
         // 添加 aliases（如果有）
@@ -1263,6 +1266,7 @@ export default class LanguageLearner extends Plugin {
         var fm = cache.frontmatter;
         const {
             expression = '',
+            surface = '',
             meaning = '',
             status = '',
             type = '',
@@ -1286,6 +1290,7 @@ export default class LanguageLearner extends Plugin {
         }
         var expressioninfo: ExpressionInfo = {
             expression: expression,
+            surface: surface || undefined,
             meaning: meaning,
             status: statusMap.indexOf(status),
             t: type,

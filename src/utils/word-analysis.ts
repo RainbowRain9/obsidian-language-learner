@@ -1,16 +1,108 @@
 export interface WordSelectionAnalysis {
-	baseExpression: string;
+	surface: string;
+	resolvedBaseExpression: string;
+	lookupCandidates: string[];
 	aliases: string[];
-	heuristicCandidates: string[];
 }
 
 const SIMPLE_WORD_RE = /^[a-z][a-z'-]*$/i;
+
+const IRREGULAR_FAMILIES: Array<[string, string[]]> = [
+	["be", ["am", "is", "are", "was", "were", "been", "being"]],
+	["begin", ["began", "begun"]],
+	["break", ["broke", "broken"]],
+	["bring", ["brought"]],
+	["build", ["built"]],
+	["buy", ["bought"]],
+	["catch", ["caught"]],
+	["choose", ["chose", "chosen"]],
+	["come", ["came"]],
+	["do", ["did", "done"]],
+	["draw", ["drew", "drawn"]],
+	["drink", ["drank", "drunk"]],
+	["drive", ["drove", "driven"]],
+	["eat", ["ate", "eaten"]],
+	["fall", ["fell", "fallen"]],
+	["feel", ["felt"]],
+	["find", ["found"]],
+	["fly", ["flew", "flown"]],
+	["forget", ["forgot", "forgotten"]],
+	["get", ["got", "gotten"]],
+	["give", ["gave", "given"]],
+	["go", ["went", "gone"]],
+	["grow", ["grew", "grown"]],
+	["have", ["had"]],
+	["hear", ["heard"]],
+	["hold", ["held"]],
+	["keep", ["kept"]],
+	["know", ["knew", "known"]],
+	["leave", ["left"]],
+	["lose", ["lost"]],
+	["make", ["made"]],
+	["meet", ["met"]],
+	["pay", ["paid"]],
+	["read", ["read"]],
+	["ride", ["rode", "ridden"]],
+	["ring", ["rang", "rung"]],
+	["run", ["ran"]],
+	["say", ["said"]],
+	["see", ["saw", "seen"]],
+	["sell", ["sold"]],
+	["send", ["sent"]],
+	["shake", ["shook", "shaken"]],
+	["sing", ["sang", "sung"]],
+	["sit", ["sat"]],
+	["speak", ["spoke", "spoken"]],
+	["stand", ["stood"]],
+	["swim", ["swam", "swum"]],
+	["take", ["took", "taken"]],
+	["teach", ["taught"]],
+	["tell", ["told"]],
+	["think", ["thought"]],
+	["throw", ["threw", "thrown"]],
+	["understand", ["understood"]],
+	["wear", ["wore", "worn"]],
+	["win", ["won"]],
+	["write", ["wrote", "written"]],
+	["man", ["men"]],
+	["woman", ["women"]],
+	["child", ["children"]],
+	["mouse", ["mice"]],
+	["goose", ["geese"]],
+	["tooth", ["teeth"]],
+	["foot", ["feet"]],
+	["person", ["people"]],
+	["ox", ["oxen"]],
+	["good", ["better", "best"]],
+	["well", ["better", "best"]],
+	["bad", ["worse", "worst"]],
+	["ill", ["worse", "worst"]],
+];
+
+const IRREGULAR_BASE_MAP = buildIrregularBaseMap();
+
+function buildIrregularBaseMap(): Record<string, string[]> {
+	const map: Record<string, string[]> = {};
+	for (const [base, forms] of IRREGULAR_FAMILIES) {
+		for (const form of forms) {
+			const normalizedForm = normalizeWordForm(form);
+			if (!normalizedForm) continue;
+			if (!map[normalizedForm]) {
+				map[normalizedForm] = [];
+			}
+			if (!map[normalizedForm].includes(base)) {
+				map[normalizedForm].push(base);
+			}
+		}
+	}
+	return map;
+}
 
 function normalizeWordForm(value?: string | null): string {
 	return (value || "").trim().toLowerCase();
 }
 
-function uniqueWords(words: string[]): string[] {
+function uniqueWords(words: Array<string | null | undefined>): string[] {
 	return [...new Set(words.map((word) => normalizeWordForm(word)).filter(Boolean))];
 }
 
@@ -29,6 +121,12 @@ function addCandidate(target: Set<string>, candidate: string) {
 	const normalized = normalizeWordForm(candidate);
 	if (!normalized || normalized.length < 2 || !SIMPLE_WORD_RE.test(normalized)) return;
 	target.add(normalized);
+}
+
+export function getIrregularBaseCandidates(selection: string): string[] {
+	const normalizedSelection = normalizeWordForm(selection);
+	if (!normalizedSelection) return [];
+	return [...(IRREGULAR_BASE_MAP[normalizedSelection] || [])];
 }
 
 export function getHeuristicBaseCandidates(selection: string): string[] {
@@ -89,32 +187,49 @@ export function getHeuristicBaseCandidates(selection: string): string[] {
 	return [...candidates];
 }
 
+function getHighConfidenceCandidate(candidates: string[]): string {
+	return candidates.length === 1 ? candidates[0] : "";
+}
+
 export function analyzeWordSelection(
 	selection: string,
 	title?: string | null,
 	pattern?: string | null
 ): WordSelectionAnalysis {
-	const normalizedSelection = normalizeWordForm(selection);
-	if (!normalizedSelection || normalizedSelection.includes(" ")) {
+	const surface = normalizeWordForm(selection);
+	if (!surface || surface.includes(" ") || !SIMPLE_WORD_RE.test(surface)) {
 		return {
-			baseExpression: normalizedSelection,
+			surface,
+			resolvedBaseExpression: surface,
+			lookupCandidates: [],
 			aliases: [],
-			heuristicCandidates: [],
 		};
 	}
 
-	const normalizedTitle = normalizeWordForm(title);
-	const patternForms = extractWordForms(pattern || "");
-	const baseExpression = normalizedTitle || normalizedSelection;
-	const aliases = uniqueWords([normalizedSelection, ...patternForms]).filter(
-		(word) => word !== baseExpression
+	const titleCandidate = normalizeWordForm(title);
+	const authoritativeTitle =
+		titleCandidate && titleCandidate !== surface ? titleCandidate : "";
+	const irregularCandidates = getIrregularBaseCandidates(surface);
+	const heuristicCandidates = getHeuristicBaseCandidates(surface);
+	const irregularBase = getHighConfidenceCandidate(irregularCandidates);
+	const heuristicBase = getHighConfidenceCandidate(heuristicCandidates);
+	const resolvedBaseExpression =
+		authoritativeTitle || irregularBase || heuristicBase || surface;
+
+	const lookupCandidates = uniqueWords([
+		authoritativeTitle,
+		!authoritativeTitle ? irregularBase : "",
+		!authoritativeTitle && !irregularBase ? heuristicBase : "",
+	]).filter((candidate) => candidate !== surface);
+
+	const aliases = uniqueWords([surface, ...extractWordForms(pattern || "")]).filter(
+		(word) => word !== resolvedBaseExpression
 	);
 
 	return {
-		baseExpression,
+		surface,
+		resolvedBaseExpression,
+		lookupCandidates,
 		aliases,
-		heuristicCandidates: normalizedTitle && normalizedTitle !== normalizedSelection
-			? []
-			: getHeuristicBaseCandidates(normalizedSelection),
 	};
 }

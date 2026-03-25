@@ -8,6 +8,9 @@
 				<NFormItem :label="t('Expression')" :label-style="labelStyle" path="expression">
 					<NInput size="small" v-model:value="model.expression" :placeholder="t('A word or a phrase')" />
 				</NFormItem>
+				<NFormItem label="Surface" :label-style="labelStyle" path="surface">
+					<NInput size="small" v-model:value="model.surface" placeholder="Original selected form" />
+				</NFormItem>
 				<!-- 单词或短语的含义(精简) -->
 				<NFormItem :label="t('Meaning')" :label-style="labelStyle" path="meaning">
 					<NInput size="small" v-model:value="model.meaning" :placeholder="t('A short definition')"
@@ -210,6 +213,7 @@ const themeOverrides: GlobalThemeOverrides = {
 //表单数据
 let model = ref<any>({
 	expression: null,
+	surface: "",
 	meaning: null,
 	status: 0,
 	t: "WORD",
@@ -300,6 +304,41 @@ async function tagSearch(query: string) {
 // 提交信息到数据库的加载状态
 let submitLoading = ref(false);
 
+function normalizeWordValue(value?: string | null): string {
+	return (value || "").trim().toLowerCase();
+}
+
+function normalizeSurfaceValue(value?: string | null): string | undefined {
+	const normalized = normalizeWordValue(value);
+	return normalized || undefined;
+}
+
+function normalizeAliasesValue(
+	value: string[] | string | null | undefined,
+	expression: string,
+	surface?: string,
+	extraAliases: string[] = []
+): string[] {
+	const source = Array.isArray(value) ? value : (value || "").split(/[,，]/);
+	const merged = [...source, ...extraAliases];
+	const normalized = [...new Set(merged.map((item) => normalizeWordValue(item)).filter(Boolean))].filter(
+		(alias) => alias !== expression
+	);
+
+	if (surface && surface !== expression && !normalized.includes(surface)) {
+		normalized.unshift(surface);
+	}
+
+	return normalized;
+}
+
+function aliasesToInputValue(value: string[] | string | null | undefined): string {
+	if (Array.isArray(value)) {
+		return value.join(", ");
+	}
+	return value || "";
+}
+
 async function submit() {
 	// 表单内容检查
 	if (!model.value.expression) {
@@ -318,47 +357,53 @@ async function submit() {
 		return;
 	}
 	submitLoading.value = true;
-	if(model.value.aliases.length !== 0){
-		model.value.aliases = model.value.aliases.toLowerCase().split(/[,，]/).map((s:string) => s.trim());
-	}
-	let data = JSON.parse(JSON.stringify(model.value));
-	(data as any).expression = (data as any).expression.trim().toLowerCase();
-	(data as any).sentences = dedupeSentences((data as any).sentences || []);
-	// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
-	
-	let statusCode = await plugin.db.postExpression(data);
-	submitLoading.value = false;
+	try {
+		let data = JSON.parse(JSON.stringify(model.value));
+		data.expression = normalizeWordValue(data.expression);
+		data.surface = normalizeSurfaceValue(data.surface);
+		data.aliases = normalizeAliasesValue(
+			data.aliases,
+			data.expression,
+			data.surface
+		);
+		data.sentences = dedupeSentences(data.sentences || []);
+		// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
 
-	if (statusCode !== 200) {
-		new Notice("Submit failed");
-		console.warn("Submit failed, please check server status");
-		return;
-	}
+		let statusCode = await plugin.db.postExpression(data);
+		if (statusCode !== 200) {
+			new Notice("Submit failed");
+			console.warn("Submit failed, please check server status");
+			return;
+		}
 
-	dispatchEvent(
-		new CustomEvent("obsidian-langr-refresh", {
-			detail: {
-				expression: model.value.expression,
-				type: model.value.t,
-				status: model.value.status,
-				meaning: model.value.meaning,
-				aliases: model.value.aliases,
-			},
-		})
-	);
-	dispatchEvent(new CustomEvent("obsidian-langr-refresh-stat"));
+		dispatchEvent(
+			new CustomEvent("obsidian-langr-refresh", {
+				detail: {
+					expression: data.expression,
+					type: data.t,
+					status: data.status,
+					meaning: data.meaning,
+					aliases: data.aliases,
+				},
+			})
+		);
+		dispatchEvent(new CustomEvent("obsidian-langr-refresh-stat"));
 
-	//自动刷新数据库（延迟执行，等待元数据缓存更新）
-	if (plugin.settings.auto_refresh_db) {
-		plugin.scheduleRefreshTextDB(500);
+		//自动刷新数据库（延迟执行，等待元数据缓存更新）
+		if (plugin.settings.auto_refresh_db) {
+			plugin.scheduleRefreshTextDB(500);
+		}
+		clearPanel();
+	} finally {
+		submitLoading.value = false;
 	}
-	clearPanel();
 };
 
 //清空词表单
 function clearPanel(){
 	model.value = {
 		expression: null,
+		surface: "",
 		meaning: null,
 		status: 1,
 		t: "WORD",
@@ -532,6 +577,7 @@ function mergeExpressionWithContext(
 	model.value = {
 		...currentModel,
 		...expr,
+		surface: expr.surface || currentModel.surface || "",
 		meaning: expr.meaning || currentModel.meaning || "",
 		sentences: dedupeSentences([...(currentModel.sentences || []), ...nextSentences]),
 		aliases: expr.aliases?.length ? expr.aliases.join(",") : currentModel.aliases || "",
@@ -566,6 +612,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	// Fast fill to avoid UI lag
 	model.value = {
 		expression: selection,
+		surface: selection,
 		meaning: "",
 		status: 1,
 		t: exprType,
@@ -624,23 +671,8 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 			lex?.pattern
 		);
 
-		if (!storedExpressionApplied && wordInfo.baseExpression && model.value.t === "WORD") {
-			model.value.expression = wordInfo.baseExpression;
-		}
-
-		if (!model.value.aliases && wordInfo.aliases.length > 0) {
-			model.value.aliases = wordInfo.aliases.join(", ");
-		}
-
-		if (!model.value.meaning) {
-			const youdaoMeaning = extractYoudaoTranslation(res);
-			if (youdaoMeaning) {
-				model.value.meaning = cleanMeaningText(youdaoMeaning);
-			}
-		}
-
 		if (!storedExpressionApplied) {
-			for (const candidate of wordInfo.heuristicCandidates) {
+			for (const candidate of wordInfo.lookupCandidates) {
 				const expr = await plugin.db.getExpression(candidate).catch((): null => null);
 				if (!expr || !isCurrent()) continue;
 				const storedSen = sanitizeSentenceRecord(await storedSenPromise);
@@ -648,6 +680,28 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 				storedExpressionApplied = true;
 				mergeExpressionWithContext(expr, sentenceText, defaultOrigin, storedSen);
 				break;
+			}
+		}
+
+		if (!storedExpressionApplied && wordInfo.resolvedBaseExpression && model.value.t === "WORD") {
+			model.value.expression = wordInfo.resolvedBaseExpression;
+		}
+
+		model.value.surface = model.value.surface || wordInfo.surface || selection;
+		const normalizedExpression = normalizeWordValue(model.value.expression);
+		const normalizedSurface = normalizeSurfaceValue(model.value.surface);
+		const mergedAliases = normalizeAliasesValue(
+			model.value.aliases,
+			normalizedExpression,
+			normalizedSurface,
+			wordInfo.aliases
+		);
+		model.value.aliases = aliasesToInputValue(mergedAliases);
+
+		if (!model.value.meaning) {
+			const youdaoMeaning = extractYoudaoTranslation(res);
+			if (youdaoMeaning) {
+				model.value.meaning = cleanMeaningText(youdaoMeaning);
 			}
 		}
 	})();

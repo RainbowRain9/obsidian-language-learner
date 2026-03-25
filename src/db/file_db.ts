@@ -214,6 +214,7 @@ export class FileDb extends DbProvider {
             .toArray();
         return {
             expression: expr.expression,
+            surface: expr.surface,
             meaning: expr.meaning,
             status: expr.status,
             t: expr.t,
@@ -289,6 +290,7 @@ export class FileDb extends DbProvider {
 
             res.push({
                 expression: expr.expression,
+                surface: expr.surface,
                 meaning: expr.meaning,
                 status: expr.status,
                 t: expr.t,
@@ -390,6 +392,7 @@ export class FileDb extends DbProvider {
 
             let updatedWord = {
                 expression: payload.expression,
+                surface: payload.surface,
                 meaning: payload.meaning,
                 status: payload.status,
                 t: payload.t,

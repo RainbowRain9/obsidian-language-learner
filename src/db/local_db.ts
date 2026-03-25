@@ -177,6 +177,7 @@ export class LocalDb extends DbProvider {
 
         return {
             expression: expr.expression,
+            surface: expr.surface,
             meaning: expr.meaning,
             status: expr.status,
             t: expr.t,
@@ -290,6 +291,7 @@ export class LocalDb extends DbProvider {
 
             expressionInfos.push({
                 expression: expr.expression,
+                surface: expr.surface,
                 meaning: expr.meaning,
                 status: expr.status,
                 t: expr.t,
@@ -321,6 +323,7 @@ export class LocalDb extends DbProvider {
 
             res.push({
                 expression: expr.expression,
+                surface: expr.surface,
                 meaning: expr.meaning,
                 status: expr.status,
                 t: expr.t,
@@ -375,6 +378,7 @@ export class LocalDb extends DbProvider {
 
         let updatedWord = {
             expression: payload.expression,
+            surface: payload.surface,
             meaning: payload.meaning,
             status: payload.status,
             t: payload.t,
@@ -431,6 +435,7 @@ export class LocalDb extends DbProvider {
 
             return {
                 expression: payload.expression,
+                surface: payload.surface,
                 meaning: payload.meaning,
                 status: payload.status,
                 t: payload.t,

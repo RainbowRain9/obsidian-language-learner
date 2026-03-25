@@ -27,6 +27,7 @@ interface Sentence {
 
 interface ExpressionInfo {
     expression: string;
+    surface?: string;
     meaning: string;
     status: number;
     t: string;

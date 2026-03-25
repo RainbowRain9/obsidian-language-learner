@@ -20,6 +20,7 @@ export class WordDB extends Dexie {
 export interface Expression {
     id?: number,
     expression: string,
+    surface?: string,
     meaning: string,
     status: number,
     t: string,
