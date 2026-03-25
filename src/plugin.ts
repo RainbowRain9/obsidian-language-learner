@@ -302,6 +302,13 @@ export default class LanguageLearner extends Plugin {
                 modal.open();
             },
         });
+        this.addCommand({
+            id: "langr-debug-copy-cleaned-sentence",
+            name: "Debug: Copy Cleaned Sentence",
+            callback: async () => {
+                await this.debugCopyCleanedSentence();
+            },
+        });
 
         this.addCommand({
             id: "langr-mark-learning-completed",
@@ -889,6 +896,36 @@ export default class LanguageLearner extends Plugin {
             sentenceText,
             origin: this.getSearchOrigin(),
         };
+    }
+
+    private async debugCopyCleanedSentence(): Promise<void> {
+        const domSelection = window.getSelection()?.toString() || "";
+        const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
+        const editorSelection = editor?.getSelection() || "";
+        const rawSelection = domSelection.trim() ? domSelection : editorSelection;
+        const normalizedSelection = this.sanitizeSentenceContext(rawSelection);
+
+        if (!normalizedSelection) {
+            new Notice("No active selection");
+            return;
+        }
+
+        const context = this.buildSearchContext(normalizedSelection);
+        const cleanedSentence = context.sentenceText || normalizedSelection;
+        console.debug("[Language Learner] sanitize debug", {
+            rawSelection,
+            normalizedSelection,
+            cleanedSentence,
+            origin: context.origin || null,
+        });
+
+        try {
+            await navigator.clipboard.writeText(cleanedSentence);
+            new Notice("已复制清洗后的例句");
+        } catch (error) {
+            console.warn("[Language Learner] Failed to copy cleaned sentence", error);
+            new Notice("复制失败，请查看控制台");
+        }
     }
 
     async queryWord(word: string, target?: HTMLElement, evtPosition?: Position): Promise<void> {
