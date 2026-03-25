@@ -9,6 +9,12 @@
 3. 保存到个人词库。
 4. 导出 `words.md` / `review.md` 供进一步检索或复习。
 
+## 📝 更新日志
+
+- 仓库内版本更新日志统一维护在 [`CHANGELOG.md`](./CHANGELOG.md)。
+- 发布前先把待发布变更写到 `Unreleased`。
+- 执行 `npm version` 或 `npm run release:*` 后，版本脚本会自动把 `Unreleased` 归档到对应版本号下。
+
 ## ✨ 主要功能
 
 ### 查词
@@ -238,8 +244,23 @@ package.json.version
 
 - `manifest.json`
 - `versions.json`
+- `CHANGELOG.md`
 
 也就是说，正常发布时不需要手动再改 3 份版本号。
+
+### 更新日志维护
+
+发布前请先更新 [`CHANGELOG.md`](./CHANGELOG.md) 里的 `Unreleased` 部分，再执行版本命令。
+
+推荐顺序：
+
+1. 在 `CHANGELOG.md` 的 `Unreleased` 中写入本次版本的更新内容。
+2. 执行 `npm run build` 或直接使用 `npm run release:*`。
+3. 执行 `npm version <patch|minor|major>` 或 `npm run release:version -- <x.y.z>`。
+4. 版本脚本会自动：
+   - 同步 `manifest.json`
+   - 同步 `versions.json`
+   - 把 `Unreleased` 归档为对应版本节
 
 ### 自动执行内容
 
@@ -304,6 +325,7 @@ src/                 源码
 scripts/             本地开发辅助脚本
 manifest.json        插件元数据
 versions.json        Obsidian 版本兼容映射
+CHANGELOG.md         仓库内版本更新日志
 ```
 
 ## 🧪 当前验证方式
