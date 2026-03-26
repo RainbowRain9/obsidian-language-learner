@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 暂无待发布更新。
+
+## [0.5.10] - 2026-03-26
+
 ### Fixed
 
 - 修复 GitHub Release workflow 在 `CHANGELOG.md` 缺少当前版本节时直接失败的问题。
