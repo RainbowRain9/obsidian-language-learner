@@ -92,10 +92,8 @@ export class ReadingView extends TextFileView {
         if ((await this.readContent("words")) === null) {
             return;
         }
-        let file = this.app.vault.getAbstractFileByPath("try.md") as TFile;
-
-        if (this.plugin.settings.use_fileDB) {
-            this.plugin.createWordfiles(await this.getLearnWords());
+        if (this.plugin.settings.use_fileDB && !this.plugin.settings.only_fileDB) {
+            await this.plugin.createWordfiles(await this.getLearnWords());
         }
 
     }
@@ -371,7 +369,7 @@ export class ReadingView extends TextFileView {
     async onClose() {
         removeEventListener("obsidian-langr-refresh", this.refresh);
         this.vueapp.unmount();
-        this.saveWords();
+        await this.saveWords();
     }
 
 }

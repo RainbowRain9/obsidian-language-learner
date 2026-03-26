@@ -23,6 +23,9 @@ import { DataPanelView, DATA_ICON, DATA_PANEL_VIEW } from "./views/DataPanelView
 import { PDFView, PDF_FILE_EXTENSION, VIEW_TYPE_PDF } from "./views/PDFView";
 
 import { setLanguage, t, type UiLanguage } from "./lang/helper";
+import enLocale from "./lang/locale/en";
+import zhLocale from "./lang/locale/zh";
+import zhTwLocale from "./lang/locale/zh-TW";
 import DbProvider from "./db/base";
 import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
@@ -47,6 +50,14 @@ export const FRONT_MATTER_KEY: string = "langr";
 
 export var imgnum: string = localStorage.getItem('imgnum') || '';
 
+const STATUS_KEYS = ["Ignore", "Learning", "Familiar", "Known", "Learned"] as const;
+const STATUS_ENGLISH = ["ignore", "learning", "familiar", "known", "learned"] as const;
+const LEGACY_STATUS_LABELS = [
+    STATUS_KEYS.map((key) => zhLocale[key].toLowerCase()),
+    STATUS_KEYS.map((key) => zhTwLocale[key].toLowerCase()),
+    STATUS_KEYS.map((key) => enLocale[key].toLowerCase()),
+];
+
 function normalizeStringArray(value: unknown): string[] {
     if (Array.isArray(value)) {
         return value
@@ -64,18 +75,11 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 function getStatusLabels() {
-    return [
-        t("Ignore"),
-        t("Learning"),
-        t("Familiar"),
-        t("Known"),
-        t("Learned"),
-    ];
+    return STATUS_KEYS.map((key) => t(key));
 }
 
 function normalizeStatusValue(value: unknown): number {
-    const statusMap = getStatusLabels();
-    if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < statusMap.length) {
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < STATUS_KEYS.length) {
         return value;
     }
 
@@ -86,20 +90,26 @@ function normalizeStatusValue(value: unknown): number {
         }
 
         const numeric = Number(trimmed);
-        if (Number.isInteger(numeric) && numeric >= 0 && numeric < statusMap.length) {
+        if (Number.isInteger(numeric) && numeric >= 0 && numeric < STATUS_KEYS.length) {
             return numeric;
         }
 
         const normalized = trimmed.toLowerCase();
-        const englishStatuses = ["ignore", "learning", "familiar", "known", "learned"];
-        const englishIndex = englishStatuses.indexOf(normalized);
+        const englishIndex = STATUS_ENGLISH.findIndex((status) => status === normalized);
         if (englishIndex >= 0) {
             return englishIndex;
         }
 
-        const localizedIndex = statusMap.findIndex(status => status.toLowerCase() === normalized);
+        const localizedIndex = getStatusLabels().findIndex((status) => status.toLowerCase() === normalized);
         if (localizedIndex >= 0) {
             return localizedIndex;
+        }
+
+        for (const labels of LEGACY_STATUS_LABELS) {
+            const legacyIndex = labels.findIndex((label) => label === normalized);
+            if (legacyIndex >= 0) {
+                return legacyIndex;
+            }
         }
     }
 
@@ -1179,6 +1189,18 @@ export default class LanguageLearner extends Plugin {
         await this.checkPath();
         var path = this.settings.word_folder;
         let info = await this.db.getExprall(words); //单词所有信息
+        const infoMap = new Map<string, ExpressionInfo>();
+        info
+            .filter((item): item is ExpressionInfo => !!item)
+            .forEach((item) => {
+                infoMap.set(item.expression.toLowerCase(), item);
+                item.aliases?.forEach((alias) => {
+                    const normalizedAlias = alias.toLowerCase();
+                    if (!infoMap.has(normalizedAlias)) {
+                        infoMap.set(normalizedAlias, item);
+                    }
+                });
+            });
         //this.createMd(exprs,this.plugin.settings.word_folder,cont); 
         for (const str of words) {
             if (path[path.length - 1] === '/') {
@@ -1186,13 +1208,17 @@ export default class LanguageLearner extends Plugin {
             } else {
                 var filePath = path + '/' + `${str}.md`;
             }
-            var ExpressionInfo = info.find(info => info.expression === str);
-            var fm = await this.createFM(ExpressionInfo);
+            const expressionInfo = infoMap.get(str.toLowerCase());
+            if (!expressionInfo) {
+                console.warn(`[Language Learner] Skip writing word file for unresolved expression: ${str}`);
+                continue;
+            }
+            var fm = await this.createFM(expressionInfo);
             try {
                 await app.vault.create(filePath, fm);
             } catch (err) {
                 if (err.message.includes('File already exists')) {
-                    this.app.vault.adapter.write(normalizePath(filePath), fm);
+                    await this.app.vault.adapter.write(normalizePath(filePath), fm);
                 }
             }
         }
@@ -1200,8 +1226,6 @@ export default class LanguageLearner extends Plugin {
 
     //直接生成frontmatter文本
     async createFM(cont: ExpressionInfo) {
-        const statusMap = getStatusLabels();
-        const status = statusMap[cont.status];
         const formattedDate = moment.unix(cont.date).format('YYYY-MM-DD HH:mm:ss');
 
         // 使用数组构建，确保每行没有前导/尾随空格
@@ -1223,7 +1247,7 @@ export default class LanguageLearner extends Plugin {
 
         // 添加基本字段
         lines.push(`date: ${formattedDate}`);
-        lines.push(`status: ${status}`);
+        lines.push(`status: ${cont.status}`);
         lines.push(`type: ${cont.t}`);
 
         // 添加 tags（如果有）
