@@ -279,6 +279,7 @@ package.json.version
    - 同步 `manifest.json`
    - 同步 `versions.json`
    - 把 `Unreleased` 归档为对应版本节
+5. GitHub Actions 创建 Release 时，会把当前版本对应的 `CHANGELOG.md` 版本节作为正文前缀写入 Release 页面，再附加自动生成的 release notes。
 
 ### 自动执行内容
 

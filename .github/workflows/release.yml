@@ -61,6 +61,13 @@ jobs:
       - name: Build plugin
         run: npm run build
 
+      - name: Extract release notes from changelog
+        shell: bash
+        run: |
+          node scripts/extract-changelog-section.mjs \
+            "${{ steps.meta.outputs.tag_version }}" \
+            "$RELEASE_DIR/release-notes.md"
+
       - name: Package release assets
         shell: bash
         run: |
@@ -78,6 +85,7 @@ jobs:
         with:
           name: ${{ steps.meta.outputs.tag_version }}
           tag_name: ${{ github.ref_name }}
+          body_path: .build/release/release-notes.md
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true

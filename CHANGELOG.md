@@ -12,6 +12,7 @@
 
 - 学习面板暂时移除了 `AI Autofill` 按钮和对应入口，避免兼容端点返回空内容时打断采词流程。
 - AI 设置页不再显示 `Card Prompt` 配置项；当前保留的 AI 配置主要用于词典释义、语境释义和句子翻译。
+- GitHub Release 流程现在会把当前版本对应的 `CHANGELOG.md` 版本节写入 Release 正文前缀，方便直接复用发布前的 `Unreleased` 内容。
 
 ### Fixed
 
