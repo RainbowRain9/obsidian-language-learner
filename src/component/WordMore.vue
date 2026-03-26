@@ -1,11 +1,11 @@
 <template>
     <div class="word-more">
         <div class="word-notes" v-if="(notes.length > 0)">
-            <h2>Notes:</h2>
+            <h2>{{ t("Notes") }}:</h2>
             <p v-for="n in notes">{{ n }}</p>
         </div>
         <div class="word-sens" v-if="(sentences.length > 0)">
-            <h2>Sentences:</h2>
+            <h2>{{ t("Sentences") }}:</h2>
             <div class="word-sen" v-for="sen in sentences">
                 <p v-html="sen.text"></p>
                 <p v-html="sen.trans"></p>
@@ -18,6 +18,7 @@
 <script setup lang='ts'>
 import { ref, getCurrentInstance } from 'vue';
 import PluginType from "@/plugin";
+import { t } from "@/lang/helper";
 
 const plugin = getCurrentInstance().appContext.config.globalProperties.plugin as PluginType;
 

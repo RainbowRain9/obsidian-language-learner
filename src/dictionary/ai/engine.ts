@@ -1,4 +1,5 @@
 import { Notice, requestUrl } from "obsidian";
+import { t } from "@/lang/helper";
 
 // 持久化缓存 (LRU + localStorage)
 class PersistentCache<V> {
@@ -81,13 +82,13 @@ function isRetryableStatus(status: number): boolean {
 // 格式化错误信息
 function formatAIError(status: number, responseText?: string): string {
     const trimmed = (responseText || '').trim();
-    if (status === 401) return '❌ API Key 无效或未设置 (401)';
-    if (status === 403) return '❌ API Key 没有权限或账户受限 (403)';
-    if (status === 404) return '❌ API 端点不存在，请检查 API URL (404)';
-    if (status === 408) return `⏱️ 请求超时 (408)，请检查网络${trimmed ? `\n${trimmed}` : ''}`;
-    if (status === 429) return `🚦 请求过于频繁 (429)，请稍后重试${trimmed ? `\n${trimmed}` : ''}`;
-    if (status >= 500 && status <= 599) return `⚠️ 服务端错误 (${status})，请稍后重试${trimmed ? `\n${trimmed}` : ''}`;
-    return `AI API 错误 (${status})${trimmed ? `: ${trimmed}` : ''}`;
+    if (status === 401) return t("Invalid API key or missing (401)");
+    if (status === 403) return t("API key lacks permission or the account is restricted (403)");
+    if (status === 404) return t("API endpoint was not found. Please check the API URL (404)");
+    if (status === 408) return `${t("Request timed out (408). Please check your network connection")}${trimmed ? `\n${trimmed}` : ''}`;
+    if (status === 429) return `${t("Too many requests (429). Please try again later")}${trimmed ? `\n${trimmed}` : ''}`;
+    if (status >= 500 && status <= 599) return `${t("Server error. Please try again later")}` + ` (${status})${trimmed ? `\n${trimmed}` : ''}`;
+    return `${t("AI API error")} (${status})${trimmed ? `: ${trimmed}` : ''}`;
 }
 
 export async function search(text: string, settings: any) {
@@ -102,7 +103,7 @@ export async function search(text: string, settings: any) {
     // 获取设置
     const { api_key, api_url, model, prompt } = settings.ai;
 
-    if (!api_key) throw new Error("❌ 请在设置中配置 API Key");
+    if (!api_key) throw new Error(t("Please configure an API key in settings"));
 
     // 构建请求体（适配 OpenAI 格式）
     const body = {
@@ -158,7 +159,7 @@ export async function search(text: string, settings: any) {
             if (e.message && !e.message.includes('API')) {
                 lastText = e.message;
                 if (attempt >= maxRetries) {
-                    throw new Error(`⏱️ 网络请求失败: ${e.message}`);
+                    throw new Error(`${t("Network request failed")}: ${e.message}`);
                 }
             } else {
                 throw e;
@@ -172,7 +173,7 @@ export async function search(text: string, settings: any) {
 // 增加翻译功能供例句使用
 export async function translate(text: string, settings: any) {
     const { api_key, api_url, model, trans_prompt } = settings.ai;
-    if (!api_key) throw new Error("❌ 请在设置中配置 API Key");
+    if (!api_key) throw new Error(t("Please configure an API key in settings"));
 
     // 替换占位符
     const finalPrompt = trans_prompt.replace("{sentence}", text);
@@ -224,7 +225,7 @@ export async function translate(text: string, settings: any) {
             if (e.message && !e.message.includes('API')) {
                 lastText = e.message;
                 if (attempt >= maxRetries) {
-                    throw new Error(`⏱️ 翻译请求失败: ${e.message}`);
+                    throw new Error(`${t("Translation request failed")}: ${e.message}`);
                 }
             } else {
                 throw e;

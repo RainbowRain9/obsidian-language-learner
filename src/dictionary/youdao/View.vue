@@ -8,24 +8,25 @@
         </div>
         <div class="meaning" style="margin-bottom: 10px;" v-html="meaningHTML"></div>
         <div class="translation" v-html="translationHTML" />
-        <button v-for="sub in ['柯林斯', '辨析', '词组', '同根词']" @click="curPanel = sub"
-            :style="curPanel === sub ? 'background-color:#483699;color:white;' : ''">
-            {{ sub }}
+        <button v-for="sub in panels" @click="curPanel = sub.value"
+            :style="curPanel === sub.value ? 'background-color:#483699;color:white;' : ''">
+            {{ sub.label }}
         </button>
-        <Collins class="collins" v-if="curPanel === '柯林斯'" :mydata="collins" />
-        <div class="discrimination" v-else-if="curPanel === '辨析'" v-html="discriminationHTML"></div>
-        <div class="word-group" v-else-if="curPanel === '词组'" v-html="wordGroupHTML"></div>
-        <div class="rel-word" v-else-if="curPanel === '同根词'" v-html="relWordHTML"></div>
+        <Collins class="collins" v-if="curPanel === 'collins'" :mydata="collins" />
+        <div class="discrimination" v-else-if="curPanel === 'discrimination'" v-html="discriminationHTML"></div>
+        <div class="word-group" v-else-if="curPanel === 'phrases'" v-html="wordGroupHTML"></div>
+        <div class="rel-word" v-else-if="curPanel === 'relatedWords'" v-html="relWordHTML"></div>
     </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 
 import Collins from "./YDCollins.vue"
 import { search, YoudaoResultLex } from "./engine"
 import { useLoading } from "@dict/uses"
 import { playAudio } from "@/utils/helpers"
+import { t } from "@/lang/helper"
 
 // import Plugin from "../plugin"
 // const plugin: Plugin = getCurrentInstance().appContext.config.globalProperties.plugin
@@ -42,11 +43,17 @@ let word = ref("")
 let meaningHTML = ref("")
 let translationHTML = ref("")
 let prons = ref([])
-let curPanel = ref("柯林斯")
+let curPanel = ref("collins")
 let collins = ref([{}])
 let discriminationHTML = ref("")
 let wordGroupHTML = ref("")
 let relWordHTML = ref("")
+const panels = computed(() => ([
+    { value: "collins", label: t("Collins") },
+    { value: "discrimination", label: t("Discrimination") },
+    { value: "phrases", label: t("Phrases") },
+    { value: "relatedWords", label: t("Related Words") },
+]));
 
 async function onSearch(): Promise<boolean> {
     let res = await search(props.word)

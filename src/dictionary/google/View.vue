@@ -2,7 +2,7 @@
     <div class="google-dict">
         <div class="google-header">
             <span class="google-icon">G</span>
-            <span class="google-title">Google Translate</span>
+            <span class="google-title">{{ t("Google Translate") }}</span>
         </div>
         <div class="google-content">
             <div class="google-result">
@@ -48,6 +48,7 @@ const result = ref<GoogleResult>({ src: "", tgt: "", srcLang: "", tgtLang: "" })
 import store from "@/store";
 import LanguageLearner from "@/plugin";
 import { getCurrentInstance } from "vue";
+import { t } from "@/lang/helper";
 
 const plugin = getCurrentInstance()?.appContext.config.globalProperties.plugin as LanguageLearner;
 

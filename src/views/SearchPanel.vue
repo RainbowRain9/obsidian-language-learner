@@ -12,7 +12,7 @@
             <input 
                 class="search-input" 
                 type="text" 
-                placeholder="输入单词" 
+                :placeholder="t('Enter a word')" 
                 v-model="inputWord" 
                 @keydown.enter="handleSearch" 
             />
@@ -29,10 +29,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, getCurrentInstance } from "vue";
+import { ref, watch, onMounted, onUnmounted, getCurrentInstance } from "vue";
 
 import DictItem from "./DictItem.vue";
-import { t } from "@/lang/helper";
+import { currentLanguageRef, t } from "@/lang/helper";
 import PluginType from "@/plugin";
 import { dicts } from "@dict/list";
 import { playAudio } from "@/utils/helpers";
@@ -43,7 +43,7 @@ let components = ref([]);
 let map: { [K in string]: number } = {};
 let loadings = ref<boolean[]>([]);
 let shows = ref<boolean[]>([]);
-watch(() => plugin.store.dictsChange, () => {
+watch([() => plugin.store.dictsChange, () => currentLanguageRef.value], () => {
     let collection = Object.keys(plugin.settings.dictionaries)
         .map((dict: keyof typeof dicts) => {
             // 检查字典是否存在
@@ -54,7 +54,7 @@ watch(() => plugin.store.dictsChange, () => {
             return {
                 id: dict,
                 priority: plugin.settings.dictionaries[dict].priority,
-                name: dicts[dict].name,
+                name: t(dicts[dict].nameKey),
             };
         })
         .filter((dict) => dict && plugin.settings.dictionaries[dict.id].enable);

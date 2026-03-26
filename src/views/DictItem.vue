@@ -4,7 +4,7 @@
             <div :class="['dict-icon', props.id]"></div>
             <span class="dict-name">{{ props.name }}</span>
             <div class="dict-loading" style="padding-left: 20px">
-                searching...
+                {{ t("Searching...") }}
             </div>
             <div class="empty-area"></div>
             <button>
@@ -33,6 +33,7 @@
 import { ref, watch, getCurrentInstance, toRef } from "vue";
 import { Platform } from "obsidian";
 import PluginType from "@/plugin";
+import { t } from "@/lang/helper";
 import { getRGB } from "@/utils/style";
 
 const plugin = getCurrentInstance().appContext.config.globalProperties

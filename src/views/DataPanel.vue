@@ -3,23 +3,23 @@
         <NConfigProvider :theme="theme" :theme-overrides="themeConfig">
             <div style="display:flex; align-items:center;">
                 <span
-                    style="display: inline-block; width: 70px; font-size: 1.2em; font-weight: bold; margin-right: 15px;">Search:</span>
+                    style="display: inline-block; width: 70px; font-size: 1.2em; font-weight: bold; margin-right: 15px;">{{ t("Search") }}:</span>
                 <NInput size="small" v-model:value="searchText" />
             </div>
             <NSpace style="margin: 10px 0;" align="center">
                 <span
                     style="display: inline-block; width: 70px; font-size: 1.2em; font-weight: bold; margin-right: 5px;">
-                    Tags:
+                    {{ t("Tags") }}:
                 </span>
                 <select v-model="mode">
-                    <option value="and">And</option>
-                    <option value="or">Or</option>
+                    <option value="and">{{ t("And") }}</option>
+                    <option value="or">{{ t("Or") }}</option>
                 </select>
                 <NTag v-for="(tag, i) in tags" size="small" checkable v-model:checked="checkedTags[i]">
                     {{ "#" + tag }}
                 </NTag>
             </NSpace>
-            <NDataTable ref="table" size="small" :loading="loading" :data="data" :columns="collumns"
+            <NDataTable ref="table" size="small" :loading="loading" :data="data" :columns="columns"
                 :row-key="makeRowKey" @update:checked-row-keys="handleCheck" :pagination="{ pageSize: 10 }" />
         </NConfigProvider>
     </div>
@@ -30,7 +30,6 @@ import { moment } from "obsidian";
 import {
     h,
     ref,
-    reactive,
     computed,
     watch,
     watchEffect,
@@ -74,7 +73,7 @@ const theme = computed(() => {
 interface Row {
     expr: string;
     exprLower: string;
-    status: string;
+    status: number;
     meaning: string;
     tags: string[];
     tagSet: Set<string>;
@@ -83,13 +82,13 @@ interface Row {
     noteNum: number;
 }
 
-const statusMap = [
+const statusLabels = computed(() => [
     t("Ignore"),
     t("Learning"),
     t("Familiar"),
     t("Known"),
     t("Learned"),
-];
+]);
 
 
 let loading = ref(true);
@@ -106,7 +105,7 @@ const loadData = async () => {
             return {
                 expr: entry.expression,
                 exprLower: entry.expression.toLowerCase(),
-                status: statusMap[entry.status],
+                status: entry.status,
                 meaning: entry.meaning,
                 tags: entry.tags,
                 tagSet: new Set(entry.tags),
@@ -157,10 +156,7 @@ function handleCheck(rowKeys: DataTableRowKey[]) {
     rowKeysRef.value = rowKeys;
 }
 
-let collumns = reactive<DataTableColumns<Row>>([
-    // {
-    //     type: "selection",
-    // },
+let columns = computed<DataTableColumns<Row>>(() => [
     {
         type: "expand",
         expandable: (row: Row) => row.noteNum + row.senNum > 0,
@@ -170,9 +166,8 @@ let collumns = reactive<DataTableColumns<Row>>([
             ]);
         },
     },
-    // 表达
     {
-        title: "Expr",
+        title: t("Expression"),
         key: "expr",
         sorter: (row1: Row, row2: Row) => row1.expr.localeCompare(row2.expr),
         filter(_value: unknown, row: Row) {
@@ -181,31 +176,25 @@ let collumns = reactive<DataTableColumns<Row>>([
             return row.exprLower.includes(searchLower.value);
         }
     },
-    // 学习状态
     {
-        title: "Status",
+        title: t("Status"),
         key: "status",
-        width: "70",
-        defaultFilterOptionValues: statusMap.slice(1),
-        filterOptions: [
-            { label: t("Ignore"), value: t("Ignore") },
-            { label: t("Learning"), value: t("Learning") },
-            { label: t("Familiar"), value: t("Familiar") },
-            { label: t("Known"), value: t("Known") },
-            { label: t("Learned"), value: t("Learned") },
-        ],
-        filter(value: string, row: Row) {
+        width: "90",
+        defaultFilterOptionValues: [1, 2, 3, 4],
+        filterOptions: statusLabels.value.map((label, value) => ({ label, value })),
+        render(row: Row) {
+            return statusLabels.value[row.status];
+        },
+        filter(value: number, row: Row) {
             return row.status === value;
         },
     },
-    // 含义
     {
-        title: "Meaning",
+        title: t("Meaning"),
         key: "meaning",
     },
-    // 标签
     {
-        title: "Tags",
+        title: t("Tags"),
         key: "tags",
         render(row: Row) {
             return row.tags.map((tag: string) =>
@@ -229,9 +218,8 @@ let collumns = reactive<DataTableColumns<Row>>([
                 : selectedTags.value.some((tag) => row.tagSet.has(tag));
         },
     },
-    // 修改日期
     {
-        title: "Date",
+        title: t("Date"),
         key: "date",
         sorter(row1: Row, row2: Row) {
             return moment.utc(row1.date).unix() - moment.utc(row2.date).unix();

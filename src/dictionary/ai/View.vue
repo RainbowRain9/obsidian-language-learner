@@ -10,6 +10,7 @@ import { ref, watch, onMounted, getCurrentInstance, nextTick } from 'vue';
 import { search } from './engine';
 import { MarkdownRenderer, Component } from 'obsidian';
 import { useLoading } from "@dict/uses";
+import { t } from '@/lang/helper';
 
 const props = defineProps<{
     word: string;
@@ -35,7 +36,7 @@ async function onSearch(): Promise<boolean> {
 
     try {
         const result = await search(props.word, plugin.settings);
-        const rawContent = result.choices?.[0]?.message?.content || "No response content";
+        const rawContent = result.choices?.[0]?.message?.content || t("No response content");
 
         if (contentContainer.value) {
             await MarkdownRenderer.renderMarkdown(
@@ -47,7 +48,7 @@ async function onSearch(): Promise<boolean> {
         }
         return true;
     } catch (e: any) {
-        error.value = e.message || "Error fetching AI response";
+        error.value = e.message || t("Error fetching AI response");
         console.error(e);
         return false;
     }

@@ -9,7 +9,7 @@
                     <div ref="videoContainer" class="video-container"></div>
                     <!-- Media Extended 工具栏 -->
                     <div class="mx-toolbar">
-                        <button class="mx-toolbar-btn" @click="showAddResourcesMenu" title="Add text track">
+                        <button class="mx-toolbar-btn" @click="showAddResourcesMenu" :title="t('Add text track')">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                         </button>
                     </div>
@@ -22,7 +22,7 @@
                     @error="onAudioError" @loadstart="onAudioLoadStart" @canplay="onAudioCanPlay"
                     style="width: 100%; height: 40px; margin: 8px 0;" />
                 <div style="display: flex">
-                    <button @click="activeNotes = true">做笔记</button>
+                    <button @click="activeNotes = true">{{ t("Take Notes") }}</button>
                     <div style="
                             flex: 1;
                             display: flex;
@@ -33,10 +33,10 @@
                             :ignore="ignore" />
                     </div>
                     <button v-if="page * pageSize < totalLines" class="finish-reading" @click="addIgnores">
-                        结束阅读并转入下一页
+                        {{ t("Finish Reading and Continue") }}
                     </button>
                     <button v-else class="finish-reading" @click="addIgnores">
-                        结束阅读
+                        {{ t("Finish Reading") }}
                     </button>
                 </div>
             </div>
@@ -64,7 +64,7 @@
             <NDrawer v-model:show="activeNotes" :placement="'bottom'" :close-on-esc="true" :auto-focus="true"
                 :on-after-enter="afterNoteEnter" :on-after-leave="afterNoteLeave" to="#langr-reading"
                 :default-height="250" resizable>
-                <NDrawerContent title="Notes">
+                <NDrawerContent :title="t('Notes')">
                     <div class="note-area">
                         <NInput class="note-input" v-model:value="notes" type="textarea" :autosize="{ minRows: 5 }" />
                         <div class="note-rendered" @mouseover="onMouseOver" ref="renderedNote"></div>
@@ -98,7 +98,7 @@ import {
 } from "naive-ui";
 import { MarkdownRenderer, Platform, Notice } from "obsidian";
 import Plugin from "@/plugin";
-import { t } from "@/lang/helper";
+import { currentLanguageRef, t } from "@/lang/helper";
 import { useEvent } from "@/utils/use";
 import store from "@/store";
 import { ReadingView } from "./ReadingView";
@@ -233,7 +233,7 @@ function showAddResourcesMenu(e: MouseEvent) {
     const mediaExtended = (plugin.app as any).plugins?.plugins?.['media-extended'];
     
     if (!mediaExtended) {
-        new Notice('Media Extended plugin is not installed or enabled');
+        new Notice(t("Media Extended plugin is not installed or enabled"));
         return;
     }
     
@@ -241,7 +241,7 @@ function showAddResourcesMenu(e: MouseEvent) {
     const mediaInfo = buildMediaInfo();
     
     if (!mediaInfo) {
-        new Notice('Invalid video URL');
+        new Notice(t("Invalid video URL"));
         return;
     }
     
@@ -249,42 +249,42 @@ function showAddResourcesMenu(e: MouseEvent) {
     console.log('[Language Learner] Media info:', mediaInfo);
     
     menu.addItem((item: any) => {
-        item.setTitle('Add text track')
+        item.setTitle(t("Add text track"))
             .setIsLabel(true);
     });
     
     menu.addItem((item: any) => {
         item.setIcon('file-plus')
-            .setTitle('from local file')
+            .setTitle(t("From local file"))
             .onClick(async () => {
                 try {
                     if (services?.transcriptSaver) {
                         await services.transcriptSaver.importTranscriptFile(mediaInfo);
-                        new Notice('Transcript imported successfully');
+                        new Notice(t("Transcript imported successfully"));
                     } else {
-                        new Notice('Media Extended transcriptSaver not available');
+                        new Notice(t("Media Extended transcript saver is not available"));
                     }
                 } catch (err) {
                     console.error('[Language Learner] Failed to import transcript:', err);
-                    new Notice('Failed to import transcript file: ' + (err as Error).message);
+                    new Notice(`${t("Failed to import transcript file")}: ${(err as Error).message}`);
                 }
             });
     });
     
     menu.addItem((item: any) => {
         item.setIcon('link')
-            .setTitle('from remote URL')
+            .setTitle(t("From remote URL"))
             .onClick(async () => {
                 try {
                     if (services?.transcriptSaver) {
                         await services.transcriptSaver.importTranscriptUrl(mediaInfo);
-                        new Notice('Transcript linked successfully');
+                        new Notice(t("Transcript linked successfully"));
                     } else {
-                        new Notice('Media Extended transcriptSaver not available');
+                        new Notice(t("Media Extended transcript saver is not available"));
                     }
                 } catch (err) {
                     console.error('[Language Learner] Failed to import transcript URL:', err);
-                    new Notice('Failed to import transcript from URL: ' + (err as Error).message);
+                    new Notice(`${t("Failed to import transcript from URL")}: ${(err as Error).message}`);
                 }
             });
     });
@@ -293,24 +293,24 @@ function showAddResourcesMenu(e: MouseEvent) {
     if (videoSource.includes('youtube.com') || videoSource.includes('youtu.be')) {
         menu.addItem((item: any) => {
             item.setIcon('captions')
-                .setTitle('from YouTube')
+                .setTitle(t("From YouTube"))
                 .onClick(async () => {
                     try {
                         if (services?.transcriptSaver && mediaInfo.type === 'youtube') {
                             await services.transcriptSaver.importYouTubeSubtitles(
                                 mediaInfo,
                                 {
-                                    onNotFound: () => new Notice('YouTube subtitles not found'),
-                                    loadingText: 'Fetching YouTube subtitles...',
-                                    errorText: 'Failed to load YouTube subtitles'
+                                    onNotFound: () => new Notice(t("YouTube subtitles not found")),
+                                    loadingText: t("Fetching YouTube subtitles..."),
+                                    errorText: t("Failed to load YouTube subtitles")
                                 }
                             );
                         } else {
-                            new Notice('Media Extended transcriptSaver not available or not a YouTube video');
+                            new Notice(t("Media Extended transcript saver is not available or this is not a YouTube video"));
                         }
                     } catch (err) {
                         console.error('[Language Learner] Failed to import YouTube subtitles:', err);
-                        new Notice('Failed to import YouTube subtitles: ' + (err as Error).message);
+                        new Notice(`${t("Failed to import YouTube subtitles")}: ${(err as Error).message}`);
                     }
                 });
         });
@@ -320,7 +320,7 @@ function showAddResourcesMenu(e: MouseEvent) {
     
     menu.addItem((item: any) => {
         item.setIcon('external-link')
-            .setTitle('Open in Media Extended')
+            .setTitle(t("Open in Media Extended"))
             .onClick(async () => {
                 try {
                     if (services?.workspaceOpen) {
@@ -334,7 +334,7 @@ function showAddResourcesMenu(e: MouseEvent) {
                     }
                 } catch (err) {
                     console.error('[Language Learner] Failed to open in Media Extended:', err);
-                    new Notice('Failed to open video in Media Extended');
+                    new Notice(t("Failed to open video in Media Extended"));
                 }
             });
     });
@@ -667,21 +667,21 @@ function onAudioCanPlay() {
 
 function onAudioError(event: Event) {
     const audio = event.target as HTMLAudioElement;
-    let errorMessage = "Unknown error";
+    let errorMessage = t("Unknown audio error");
     
     if (audio.error) {
         switch (audio.error.code) {
             case MediaError.MEDIA_ERR_ABORTED:
-                errorMessage = "Audio loading aborted";
+                errorMessage = t("Audio loading aborted");
                 break;
             case MediaError.MEDIA_ERR_NETWORK:
-                errorMessage = "Network error while loading audio";
+                errorMessage = t("Network error while loading audio");
                 break;
             case MediaError.MEDIA_ERR_DECODE:
-                errorMessage = "Audio decoding failed - unsupported format";
+                errorMessage = t("Audio decoding failed - unsupported format");
                 break;
             case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                errorMessage = "Audio source not supported or not found";
+                errorMessage = t("Audio source not supported or not found");
                 break;
         }
     }
@@ -690,7 +690,7 @@ function onAudioError(event: Event) {
     console.error("[Language Learner] Audio source:", audioSource);
     console.error("[Language Learner] Error details:", audio.error);
     
-    new Notice(`Audio playback error: ${errorMessage}`);
+    new Notice(`${t("Audio playback error")}: ${errorMessage}`);
 }
 
 // 处理音频点击
@@ -763,14 +763,14 @@ function handleAudioClick(e: MouseEvent) {
 
 // 分页渲染文本
 
-const pageSizes = [
+const pageSizes = computed(() => [
     { label: `1 ${t("paragraph")} / ${t("page")}`, value: 2 },
     { label: `2 ${t("paragraph")} / ${t("page")}`, value: 4 },
     { label: `4 ${t("paragraph")} / ${t("page")}`, value: 8 },
     { label: `8 ${t("paragraph")} / ${t("page")}`, value: 16 },
     { label: `16 ${t("paragraph")} / ${t("page")}`, value: 32 },
     { label: `${t("All")}`, value: Number.MAX_VALUE },
-];
+]);
 
 const pageSlot = Platform.isMobileApp ? 5 : null;
 
@@ -802,6 +802,10 @@ function waitForIdle(): Promise<void> {
         }
     });
 }
+
+watch(() => currentLanguageRef.value, () => {
+    refreshHandle.value = !refreshHandle.value;
+});
 
 // pageSize变化应该使page同时进行调整以尽量保持原阅读位置
 // 同时page和pageSize的改变都应该引起langr-pos的改变，但应只修改一次

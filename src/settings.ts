@@ -3,7 +3,7 @@ import { App, Notice, PluginSettingTab, Setting, Modal, moment, debounce, reques
 import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
 import LanguageLearner from "./plugin";
-import { t } from "./lang/helper";
+import { t, type UiLanguage } from "./lang/helper";
 import { WarningModal, OpenFileModal } from "./modals"
 import { dicts } from "@dict/list";
 import store from "./store";
@@ -19,6 +19,7 @@ export interface MyPluginSettings {
     // lang
     native: string;
     foreign: string;
+    ui_language: UiLanguage;
     // search
     popup_search: boolean;
     auto_pron: boolean;
@@ -79,6 +80,7 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     // lang - 语言设置
     native: "zh",  // 母语：中文
     foreign: "en",  // 外语：英语
+    ui_language: "en",
     // search - 查询设置（优化后的默认值）
     popup_search: true,  // ✅ 划词弹出翻译
     auto_pron: true,  // ✅ 自动发音
@@ -148,19 +150,19 @@ export class SettingTab extends PluginSettingTab {
 
         // Title
         const header = mainContainer.createDiv({ cls: "ll-settings-header" });
-        header.createEl("h1", { text: "Language Learner" });
-        header.createEl("p", { text: "Make language learning an integral part of your knowledge base.", cls: "ll-settings-subtitle" });
+        header.createEl("h1", { text: t("Language Learner") });
+        header.createEl("p", { text: t("Make language learning an integral part of your knowledge base."), cls: "ll-settings-subtitle" });
 
         // Create tab container
         const tabContainer = mainContainer.createDiv({ cls: "ll-tab-container" });
 
         // Create tab headers
         const tabHeaders = tabContainer.createDiv({ cls: "ll-tab-headers" });
-        this.createTabHeader(tabHeaders, "general", "General", "通用设置");
-        this.createTabHeader(tabHeaders, "dictionaries", "Dictionaries", "词典管理");
-        this.createTabHeader(tabHeaders, "database", "Database", "数据存储");
-        this.createTabHeader(tabHeaders, "reading", "Reading", "阅读模式");
-        this.createTabHeader(tabHeaders, "ai", "AI & Advanced", "AI与高级");
+        this.createTabHeader(tabHeaders, "general", t("General"));
+        this.createTabHeader(tabHeaders, "dictionaries", t("Dictionaries"));
+        this.createTabHeader(tabHeaders, "database", t("Database"));
+        this.createTabHeader(tabHeaders, "reading", t("Reading"));
+        this.createTabHeader(tabHeaders, "ai", t("AI & Advanced"));
 
         // Create tab contents wrapper for card effect
         const contentWrapper = tabContainer.createDiv({ cls: "ll-content-wrapper" });
@@ -198,12 +200,12 @@ export class SettingTab extends PluginSettingTab {
         this.switchTab(this.activeTab);
     }
 
-    private createTabHeader(container: HTMLElement, id: string, labelEn: string, labelZh: string) {
+    private createTabHeader(container: HTMLElement, id: string, label: string, caption = "") {
         const tab = container.createDiv({ cls: "ll-tab-header" });
         const enSpan = tab.createSpan({ cls: "ll-tab-en" });
-        enSpan.textContent = labelEn;
+        enSpan.textContent = label;
         const zhSpan = tab.createSpan({ cls: "ll-tab-zh" });
-        zhSpan.textContent = labelZh;
+        zhSpan.textContent = caption;
 
         tab.dataset.tab = id;
 
@@ -247,11 +249,11 @@ export class SettingTab extends PluginSettingTab {
     }
 
     aiSettings(containerEl: HTMLElement) {
-        containerEl.createEl("h3", { text: "AI Settings" });
+        containerEl.createEl("h3", { text: t("AI Settings") });
 
         new Setting(containerEl)
-            .setName("Provider")
-            .setDesc("Select AI Provider")
+            .setName(t("AI Provider"))
+            .setDesc(t("Select AI provider"))
             .addDropdown(dropdown => {
                 Object.keys(AI_PROVIDERS).forEach(key => {
                     dropdown.addOption(key, AI_PROVIDERS[key as keyof typeof AI_PROVIDERS].label);
@@ -272,8 +274,8 @@ export class SettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName("API URL")
-            .setDesc("API Endpoint URL")
+            .setName(t("API URL"))
+            .setDesc(t("API endpoint URL"))
             .addText(text => text
                 .setValue(this.plugin.settings.ai.api_url)
                 .onChange(async (value) => {
@@ -283,8 +285,8 @@ export class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName("API Key")
-            .setDesc("Enter your API Key (supports OpenAI/Gemini/DeepSeek format)")
+            .setName(t("API Key"))
+            .setDesc(t("Enter your API key (supports OpenAI, Gemini, and DeepSeek formats)"))
             .addText(text => {
                 text.setPlaceholder("sk-... / AIza...")
                     .setValue(this.plugin.settings.ai.api_key)
@@ -294,7 +296,7 @@ export class SettingTab extends PluginSettingTab {
                         const trimmed = value.trim();
                         if (trimmed && !trimmed.startsWith("sk-") && !trimmed.startsWith("AIza") && trimmed.length < 20) {
                             inputEl.style.borderColor = "var(--text-error)";
-                            inputEl.title = "⚠️ API Key 格式可能不正确";
+                            inputEl.title = t("API key format may be invalid");
                         } else {
                             inputEl.style.borderColor = "var(--background-modifier-border)";
                             inputEl.title = "";
@@ -311,8 +313,8 @@ export class SettingTab extends PluginSettingTab {
         const currentProvider = AI_PROVIDERS[this.plugin.settings.ai.provider as keyof typeof AI_PROVIDERS];
         if (currentProvider && currentProvider.models.length > 0) {
             new Setting(containerEl)
-                .setName("Select Model")
-                .setDesc("Choose from available models")
+                .setName(t("Select Model"))
+                .setDesc(t("Choose from available models"))
                 .addDropdown(dropdown => {
                     currentProvider.models.forEach(model => {
                         dropdown.addOption(model, model);
@@ -334,8 +336,8 @@ export class SettingTab extends PluginSettingTab {
                 });
         } else {
             new Setting(containerEl)
-                .setName("Model Name")
-                .setDesc("Enter the model name")
+                .setName(t("Model Name"))
+                .setDesc(t("Enter the model name"))
                 .addText(text => text
                     .setValue(this.plugin.settings.ai.model)
                     .onChange(async (value) => {
@@ -346,8 +348,8 @@ export class SettingTab extends PluginSettingTab {
         }
 
         new Setting(containerEl)
-            .setName("System Prompt")
-            .setDesc("Prompt for dictionary definition")
+            .setName(t("System Prompt"))
+            .setDesc(t("Prompt for dictionary definition"))
             .addTextArea(text => text
                 .setValue(this.plugin.settings.ai.prompt)
                 .onChange(async (value) => {
@@ -357,8 +359,8 @@ export class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName("Translation Prompt")
-            .setDesc("Prompt for sentence translation. Use {sentence} as placeholder.")
+            .setName(t("Translation Prompt"))
+            .setDesc(t("Prompt for sentence translation. Use {sentence} as the placeholder."))
             .addTextArea(text => text
                 .setValue(this.plugin.settings.ai.trans_prompt)
                 .onChange(async (value) => {
@@ -368,18 +370,18 @@ export class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName("Test Connection")
-            .setDesc("Test if the API configuration is correct")
+            .setName(t("Test Connection"))
+            .setDesc(t("Test whether the current API configuration works"))
             .addButton(button => button
-                .setButtonText("Test")
+                .setButtonText(t("Test"))
                 .onClick(async () => {
-                    button.setButtonText("Testing...");
+                    button.setButtonText(t("Testing..."));
                     button.setDisabled(true);
                     try {
                         const { api_url, api_key, model, provider } = this.plugin.settings.ai;
 
                         if (!api_key) {
-                            new Notice("Please enter API Key first");
+                            new Notice(t("Please enter API key first"));
                             return;
                         }
 
@@ -413,28 +415,28 @@ export class SettingTab extends PluginSettingTab {
                         });
 
                         if (response.status === 200) {
-                            new Notice("Connection successful!");
+                            new Notice(t("Connection successful!"));
                         } else {
-                            new Notice(`Connection failed: ${response.status}`);
+                            new Notice(`${t("Connection failed")}: ${response.status}`);
                         }
                     } catch (error: any) {
                         console.error(error);
-                        let msg = "Connection failed";
+                        let msg = t("Connection failed");
                         if (error.status) {
                             switch (error.status) {
-                                case 401: msg = "Invalid API Key (401)"; break;
-                                case 403: msg = "Permission denied (403)"; break;
-                                case 404: msg = "Invalid API URL (404)"; break;
-                                case 429: msg = "Rate limit exceeded (429)"; break;
-                                case 500: msg = "Server error (500)"; break;
-                                case 503: msg = "Service unavailable (503)"; break;
+                                case 401: msg = t("Invalid API key (401)"); break;
+                                case 403: msg = t("Permission denied (403)"); break;
+                                case 404: msg = t("Invalid API URL (404)"); break;
+                                case 429: msg = t("Rate limit exceeded (429)"); break;
+                                case 500: msg = t("Server error (500)"); break;
+                                case 503: msg = t("Service unavailable (503)"); break;
                             }
                         } else if (error.message) {
                             msg += `: ${error.message}`;
                         }
                         new Notice(msg);
                     } finally {
-                        button.setButtonText("Test");
+                        button.setButtonText(t("Test"));
                         button.setDisabled(false);
                     }
                 })
@@ -445,6 +447,20 @@ export class SettingTab extends PluginSettingTab {
 
     langSettings(containerEl: HTMLElement) {
         containerEl.createEl("h3", { text: t("Language") });
+
+        new Setting(containerEl)
+            .setName(t("Interface Language"))
+            .setDesc(t("Changes apply immediately to open plugin panels."))
+            .addDropdown(dropdown => dropdown
+                .addOption("zh", "中文")
+                .addOption("en", "English")
+                .setValue(this.plugin.settings.ui_language === "zh-TW" ? "zh" : this.plugin.settings.ui_language)
+                .onChange(async (value: UiLanguage | "zh") => {
+                    this.plugin.applyUiLanguage(value);
+                    await this.plugin.saveSettings();
+                    this.display();
+                })
+            );
 
         new Setting(containerEl)
             .setName(t("Native"))
@@ -562,6 +578,7 @@ export class SettingTab extends PluginSettingTab {
                                     const content = e.target?.result as string;
                                     const settings = JSON.parse(content);
                                     this.plugin.settings = Object.assign({}, this.plugin.settings, settings);
+                                    this.plugin.applyUiLanguage(this.plugin.settings.ui_language);
                                     await this.plugin.saveSettings();
                                     new Notice(t("Settings imported successfully!"));
                                     this.display();
@@ -612,7 +629,11 @@ export class SettingTab extends PluginSettingTab {
         };
 
         Object.keys(dicts).forEach((dict: keyof typeof dicts) => {
-            createDictSetting(dict, dicts[dict].name, dicts[dict].description);
+            createDictSetting(
+                dict,
+                t(dicts[dict].nameKey),
+                t(dicts[dict].descriptionKey)
+            );
         });
 
         new Setting(containerEl)
@@ -648,7 +669,7 @@ export class SettingTab extends PluginSettingTab {
                     this.plugin.db.close();
                     this.plugin.db = new LocalDb(this.plugin);
                     await this.plugin.db.open();
-                    new Notice("DB is Reopened");
+                    new Notice(t("Database reopened"));
                 })
             );
 
@@ -665,7 +686,7 @@ export class SettingTab extends PluginSettingTab {
                         // fr.onload = async () => {
                         // let data = JSON.parse(fr.result as string)
                         await this.plugin.db.importDB(file);
-                        new Notice("Imported");
+                        new Notice(t("Imported"));
                         // }
                         // fr.readAsText(file)
                     });
@@ -677,7 +698,7 @@ export class SettingTab extends PluginSettingTab {
                 .setButtonText(t("Export"))
                 .onClick(async () => {
                     await this.plugin.db.exportDB();
-                    new Notice("Exported");
+                    new Notice(t("Exported"));
                 })
             );
         // 获取所有非无视单词
@@ -727,7 +748,7 @@ export class SettingTab extends PluginSettingTab {
                         t("Are you sure you want to destroy your database?"),
                         async () => {
                             await this.plugin.db.destroyAll();
-                            new Notice("已清空");
+                            new Notice(t("Cleared"));
                             this.plugin.db = new LocalDb(this.plugin);
                             this.plugin.db.open();
                         });
@@ -820,10 +841,10 @@ export class SettingTab extends PluginSettingTab {
                 .setButtonText(t("Update"))
                 .onClick(async (evt) => {
                     if (this.plugin.settings.only_fileDB) {
-                        new Notice('"仅使用单词文件库"设置已开启，无法更新');
+                        new Notice(t("Update unavailable while only word files database is enabled"));
                     } else {
                         await this.plugin.updateWordfiles();
-                        new Notice("已更新");
+                        new Notice(t("Updated"));
                     }
                 })
             );
@@ -835,10 +856,10 @@ export class SettingTab extends PluginSettingTab {
                 .setButtonText(t("Update"))
                 .onClick(async (evt) => {
                     if (this.plugin.settings.only_fileDB) {
-                        new Notice('"仅使用单词文件库"设置已开启，无法更新');
+                        new Notice(t("Update unavailable while only word files database is enabled"));
                     } else {
                         await this.plugin.updateIndexDB();
-                        new Notice("已更新");
+                        new Notice(t("Updated"));
                     }
                 })
             );

@@ -22,7 +22,7 @@ import { StatView, STAT_ICON, STAT_VIEW_TYPE } from "./views/StatView";
 import { DataPanelView, DATA_ICON, DATA_PANEL_VIEW } from "./views/DataPanelView";
 import { PDFView, PDF_FILE_EXTENSION, VIEW_TYPE_PDF } from "./views/PDFView";
 
-import { t } from "./lang/helper";
+import { setLanguage, t, type UiLanguage } from "./lang/helper";
 import DbProvider from "./db/base";
 import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
@@ -63,15 +63,18 @@ function normalizeStringArray(value: unknown): string[] {
     return [];
 }
 
-const statusMap = [
-    t("Ignore"),
-    t("Learning"),
-    t("Familiar"),
-    t("Known"),
-    t("Learned"),
-];
+function getStatusLabels() {
+    return [
+        t("Ignore"),
+        t("Learning"),
+        t("Familiar"),
+        t("Known"),
+        t("Learned"),
+    ];
+}
 
 function normalizeStatusValue(value: unknown): number {
+    const statusMap = getStatusLabels();
     if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < statusMap.length) {
         return value;
     }
@@ -120,9 +123,22 @@ export default class LanguageLearner extends Plugin {
     private refreshTextDbTimer: number | null = null;
     private refreshTextDbRunning = false;
     private refreshTextDbQueued = false;
+
+    applyUiLanguage(lang?: string | null): UiLanguage {
+        const normalized = setLanguage(lang);
+        this.settings.ui_language = normalized;
+        this.store.uiLanguage = normalized;
+        this.store.localeVersion += 1;
+        dispatchEvent(new CustomEvent("obsidian-langr-language-change", {
+            detail: { language: normalized }
+        }));
+        return normalized;
+    }
+
     async onload() {
         // 读取设置
         await this.loadSettings();
+        this.applyUiLanguage(this.settings.ui_language);
         await this.ensureDefaultTextDbFiles();
         this.addSettingTab(new SettingTab(this.app, this));
 
@@ -314,6 +330,8 @@ export default class LanguageLearner extends Plugin {
         this.store.searchPinned = false;
         this.store.dictsChange = false;
         this.store.dictHeight = this.settings.dict_height;
+        this.store.uiLanguage = this.settings.ui_language;
+        this.store.localeVersion = 0;
     }
 
     addCommands() {
@@ -352,7 +370,7 @@ export default class LanguageLearner extends Plugin {
         });
         this.addCommand({
             id: "langr-debug-copy-cleaned-sentence",
-            name: "Debug: Copy Cleaned Sentence",
+            name: t("Debug: Copy Cleaned Sentence"),
             callback: async () => {
                 await this.debugCopyCleanedSentence();
             },
@@ -526,12 +544,13 @@ export default class LanguageLearner extends Plugin {
         if (!this.settings.word_database) {
             return;
         }
+        const statusMap = getStatusLabels();
 
         let dataBase = this.app.vault.getAbstractFileByPath(
             this.settings.word_database
         );
         if (!dataBase || dataBase.hasOwnProperty("children")) {
-            new Notice("Invalid refresh database path");
+            new Notice(t("Invalid refresh database path"));
             return;
         }
         // 获取所有非无视单词的简略信息
@@ -564,7 +583,7 @@ export default class LanguageLearner extends Plugin {
             .map((i) => `${words[i].meaning}  ${del}  ${words[i].expression}`)
             .join("\n");
 
-        let text = word2Meaning + "\n\n" + "#### 反向查询\n" + meaning2Word;
+        let text = word2Meaning + "\n\n" + `#### ${t("Reverse Lookup")}\n` + meaning2Word;
         const hash = `${words.length}-${text.length}-${text.slice(0, 256)}-${text.slice(-256)}`;
         if (this.settings.last_word_db_hash === hash) {
             return;
@@ -584,7 +603,7 @@ export default class LanguageLearner extends Plugin {
             this.settings.review_database
         );
         if (!dataBase || "children" in dataBase) {
-            new Notice("Invalid word database path");
+            new Notice(t("Invalid review database path"));
             return;
         }
 
@@ -964,7 +983,7 @@ export default class LanguageLearner extends Plugin {
         const normalizedSelection = this.sanitizeSentenceContext(rawSelection);
 
         if (!normalizedSelection) {
-            new Notice("No active selection");
+            new Notice(t("No active selection"));
             return;
         }
 
@@ -979,10 +998,10 @@ export default class LanguageLearner extends Plugin {
 
         try {
             await navigator.clipboard.writeText(cleanedSentence);
-            new Notice("已复制清洗后的例句");
+            new Notice(t("Copied cleaned sentence"));
         } catch (error) {
             console.warn("[Language Learner] Failed to copy cleaned sentence", error);
-            new Notice("复制失败，请查看控制台");
+            new Notice(t("Failed to copy cleaned sentence"));
         }
     }
 
@@ -1109,6 +1128,9 @@ export default class LanguageLearner extends Plugin {
             }
         }
         (this.settings as any) = settings;
+        if (data.ui_language === undefined && typeof window !== "undefined") {
+            this.settings.ui_language = setLanguage(window.localStorage.getItem("language"), false);
+        }
         // this.settings = Object.assign(
         //     {},
         //     DEFAULT_SETTINGS,
@@ -1178,6 +1200,7 @@ export default class LanguageLearner extends Plugin {
 
     //直接生成frontmatter文本
     async createFM(cont: ExpressionInfo) {
+        const statusMap = getStatusLabels();
         const status = statusMap[cont.status];
         const formattedDate = moment.unix(cont.date).format('YYYY-MM-DD HH:mm:ss');
 
@@ -1247,7 +1270,7 @@ export default class LanguageLearner extends Plugin {
         
         // 进度提示
         const total = words.length;
-        const notice = new Notice(`正在同步数据库 (0/${total})...`, 0);
+        const notice = new Notice(`${t("Syncing database")} (0/${total})...`, 0);
         
         var ignorwords = (await this.db.getAllExpressionSimple(true))
             .filter(item => item.status === 0)
@@ -1288,13 +1311,13 @@ export default class LanguageLearner extends Plugin {
             }
 
             processed += batch.length;
-            notice.setMessage(`正在同步数据库 (${processed}/${total})...`);
+            notice.setMessage(`${t("Syncing database")} (${processed}/${total})...`);
             
             // 让出主线程，避免 UI 卡顿
             await new Promise(r => setTimeout(r, 0));
         }
 
-        notice.setMessage(`正在写入数据库...`);
+        notice.setMessage(`${t("Writing database")}...`);
 
         if (expressionInfos.length > 0) {
             if (this.db instanceof LocalDb) {
@@ -1310,7 +1333,7 @@ export default class LanguageLearner extends Plugin {
         this.db.postIgnoreWords(ignorwords.filter(item => item !== ""));
         
         notice.hide();
-        new Notice(`✅ 同步完成，共 ${expressionInfos.length} 条记录`);
+        new Notice(`${t("Sync complete")}: ${expressionInfos.length}`);
     }
 
     //解析某个单词文件的fm信息

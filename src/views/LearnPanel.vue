@@ -2,14 +2,14 @@
 	<div id="langr-learn-panel">
 		<NConfigProvider :theme="theme" :theme-overrides="themeOverrides">
 			<!-- <NThemeEditor> -->
-			<NForm :model="model" label-placement="top" label-width="auto" :rules="rules"
+				<NForm :model="model" label-placement="top" label-width="auto" :rules="rules"
 				require-mark-placement="right-hanging">
 				<!-- 一个单词或短语字符串 -->
 				<NFormItem :label="t('Expression')" :label-style="labelStyle" path="expression">
 					<NInput size="small" v-model:value="model.expression" :placeholder="t('A word or a phrase')" />
 				</NFormItem>
-				<NFormItem label="Surface" :label-style="labelStyle" path="surface">
-					<NInput size="small" v-model:value="model.surface" placeholder="Original selected form" />
+				<NFormItem :label="t('Surface')" :label-style="labelStyle" path="surface">
+					<NInput size="small" v-model:value="model.surface" :placeholder="t('Original selected form')" />
 				</NFormItem>
 				<!-- 单词或短语的含义(精简) -->
 				<NFormItem :label="t('Meaning')" :label-style="labelStyle" path="meaning">
@@ -93,16 +93,16 @@
 							class="action-btn translate-btn" 
 							:class="{ 'ai-mode': translationTypes[index] === 'ai' }"
 							@click="toggleTrans(index, model.sentences[index])"
-							:title="translationTypes[index] === 'ai' ? 'AI翻译模式' : '机器翻译模式'"
+							:title="translationTypes[index] === 'ai' ? t('AI translation mode') : t('Machine translation mode')"
 						>
-							{{ translationTypes[index] === 'ai' ? 'AI' : '机' }}
+							{{ getTranslationModeShortLabel(translationTypes[index]) }}
 						</div>
 						
 						<!-- 删除按钮 -->
 						<div
 							class="action-btn delete-btn"
 							@click="() => model.sentences.splice(index, 1)"
-							:title="'删除例句'"
+							:title="t('Delete sentence')"
 						>
 							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
 						</div>
@@ -111,7 +111,7 @@
 						<div
 							class="action-btn add-btn"
 							@click="() => model.sentences.splice(index + 1, 0, onCreateSentence())"
-							:title="'添加例句'"
+							:title="t('Add sentence')"
 						>
 							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
 						</div>
@@ -225,7 +225,7 @@ let model = ref<any>({
 });
 
 // 表单检查规则
-let rules = {
+const rules = computed(() => ({
 	expression: {
 		required: true,
 		trigger: ["blur", "input"],
@@ -239,18 +239,18 @@ let rules = {
 	t: {
 		required: true,
 		trigger: "change",
-		message: "Expression can be a word or phrase",
+		message: t("Expression can be a word or phrase"),
 	},
 	status: {
 		required: true,
 	},
-};
+}));
 
-let sourceRule = {
+const sourceRule = computed(() => ({
 	required: true,
 	trigger: ["blur", "input"],
-	message: "At least input a source sentence",
-};
+	message: t("At least input a source sentence"),
+}));
 
 let labelStyle: CSSProperties = {
 	// fontSize: "16px",
@@ -267,13 +267,13 @@ function onCreateSentence() {
 }
 
 // 单词状态样式
-const status = [
+const status = computed(() => [
 	{ text: t("Ignore"), style: "" },
 	{ text: t("Learning"), style: "background-Color: #ff980055" },
 	{ text: t("Familiar"), style: "background-Color: #ffeb3c55" },
 	{ text: t("Known"), style: "background-Color: #9eda5855" },
 	{ text: t("Learned"), style: "background-Color: #4cb05155" },
-];
+]);
 
 
 // 异步获取数据库中所有tag
@@ -371,7 +371,7 @@ async function submit() {
 
 		let statusCode = await plugin.db.postExpression(data);
 		if (statusCode !== 200) {
-			new Notice("Submit failed");
+			new Notice(t("Submit failed"));
 			console.warn("Submit failed, please check server status");
 			return;
 		}
@@ -728,6 +728,10 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 const translationTypes = ref<Record<number, 'machine' | 'ai'>>({});
 const translationCache = ref<Record<string, { machine?: string; ai?: string }>>({});
 
+function getTranslationModeShortLabel(mode: "machine" | "ai" | undefined) {
+	return mode === "ai" ? "AI" : t("Machine translation short");
+}
+
 const toggleTrans = async (index: number, element: any) => {
     const currentType = translationTypes.value[index] || 'machine';
     const newType = currentType === 'machine' ? 'ai' : 'machine';
@@ -764,7 +768,7 @@ const toggleTrans = async (index: number, element: any) => {
             translationTypes.value[index] = newType;
         }
     } catch (e) {
-        new Notice("Translation failed");
+        new Notice(t("Translation failed"));
         console.error(e);
     }
 };

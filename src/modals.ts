@@ -14,7 +14,7 @@ class InputModal extends Modal {
     onOpen() {
         const { contentEl } = this;
         contentEl.createEl("h3", {
-            text: "Input Text",
+            text: t("Input Text"),
             attr: {
                 style: "margin: 10px 0;",
             }

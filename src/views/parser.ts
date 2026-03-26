@@ -7,6 +7,7 @@ import { toString } from "nlcst-to-string";
 import { TFile } from "obsidian";
 
 import { Phrase, Word } from "@/db/interface";
+import { t } from "@/lang/helper";
 import Plugin from "@/plugin";
 
 const STATUS_MAP = ["ignore", "learning", "familiar", "known", "learned"];
@@ -366,7 +367,9 @@ export class TextParser {
                                 filename.toLowerCase().startsWith('recording_') ||
                                 filename.toLowerCase().includes('/recording_');
                             const audioType = isHumanRecording ? 'human' : 'ai';
-                            const title = isHumanRecording ? 'Play Recording (Human Voice)' : 'Play Audio (AI Voice)';
+                            const title = isHumanRecording
+                                ? t("Play Recording (Human Voice)")
+                                : t("Play Audio (AI Voice)");
 
                             // 人工录音总是使用图标模式，其他音频根据 inline 属性决定
                             if (isHumanRecording) {
@@ -411,7 +414,7 @@ export class TextParser {
                                 }
                             }
                         }
-                        return `<span class="error" style="color: red;">Audio file not found: ${filename}</span>`;
+                        return `<span class="error" style="color: red;">${t("Audio file not found")}: ${filename}</span>`;
                     }
 
                     let textLower = text.toLowerCase();

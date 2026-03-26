@@ -10,6 +10,7 @@ import {
 import DbProvider from "./base";
 import { WordDB, Expression } from "./idb";
 import Plugin from "@/plugin";
+import { t } from "@/lang/helper";
 
 
 export class LocalDb extends DbProvider {
@@ -566,10 +567,10 @@ export class LocalDb extends DbProvider {
             const backupBlob = await exportDB(this.idb);
             const timestamp = moment().format('YYYYMMDD_HHmmss');
             download(backupBlob, `backup_before_import_${timestamp}.json`, "application/json");
-            new Notice("✅ 已自动备份当前数据库");
+            new Notice(t("Current database was backed up automatically"));
         } catch (e) {
             console.warn("备份失败，继续导入", e);
-            new Notice("⚠️ 备份失败，但将继续导入");
+            new Notice(t("Backup failed, but import will continue"));
         }
 
         await this.idb.delete();

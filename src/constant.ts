@@ -33,6 +33,9 @@ interface EventMap extends GlobalEventHandlersEventMap {
         aliases: string[],
     }>;
     "obsidian-langr-refresh-stat": CustomEvent<{}>;
+    "obsidian-langr-language-change": CustomEvent<{
+        language: "en" | "zh" | "zh-TW",
+    }>;
     "obsidian-langr-toast": CustomEvent<{
         message: string,
         type?: "info" | "success" | "error",

@@ -4,8 +4,8 @@
 
 <script setup lang="ts">
 import { moment } from "obsidian";
-import { computed, ref, onMounted, onUnmounted, getCurrentInstance } from "vue";
-import { t } from "@/lang/helper";
+import { onMounted, onUnmounted, getCurrentInstance, watch } from "vue";
+import { currentLanguageRef, t } from "@/lang/helper";
 import LanguageLearner from "@/plugin";
 
 import * as echarts from "echarts/core";
@@ -56,6 +56,7 @@ onMounted(async () => {
 		height: 350,
 	});
 	option && sevenDays.setOption(option);
+	applyChartLabels();
 	// },0)
 	updateChart();
 });
@@ -66,7 +67,7 @@ const last7days = [6, 5, 4, 3, 2, 1, 0].map((i) =>
 
 option = {
 	title: {
-		text: "Words",
+		text: t("Words"),
 	},
 	tooltip: {
 		trigger: "axis",
@@ -120,6 +121,22 @@ option = {
 	],
 };
 
+function applyChartLabels() {
+	if (!sevenDays) {
+		return;
+	}
+
+	sevenDays.setOption({
+		title: {
+			text: t("Words"),
+		},
+		series: [
+			{ name: t("Day Ignore") },
+			{ name: t("Day Non-Ignore") },
+			{ name: t("Accumulated") },
+		],
+	});
+}
 
 async function updateChart() {
 	let data = await plugin.db.countSeven();
@@ -140,6 +157,10 @@ async function updateChart() {
 
 onMounted(() => {
 	addEventListener("obsidian-langr-refresh-stat", updateChart);
+});
+
+watch(() => currentLanguageRef.value, () => {
+	applyChartLabels();
 });
 
 onUnmounted(() => {

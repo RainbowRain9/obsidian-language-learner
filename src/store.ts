@@ -1,4 +1,5 @@
 import { reactive } from "vue"; //通过使用 reactive，可以确保对象中的数据变化时，自动触发相关的视图更新
+import type { UiLanguage } from "./lang/helper";
 
 const store = reactive({
     text: "",
@@ -11,6 +12,8 @@ const store = reactive({
     searchPinned: false,
     dictsChange: false,
     dictHeight: "300px", // 设置默认高度，与 settings.ts 保持一致
+    uiLanguage: "en" as UiLanguage,
+    localeVersion: 0,
 });
 
 export default store; //将 store 对象导出，以便在其他组件或模块中可以导入并使用。

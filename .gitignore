@@ -2,3 +2,4 @@ node_modules
 .build/
 references/
 Language-Learner.ffs_gui
+.claude/
