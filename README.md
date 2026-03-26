@@ -41,6 +41,7 @@
 
 - 为带 `langr` frontmatter 的笔记提供专门的 Reading View。
 - 支持分页阅读、单词高亮、短语识别、悬停释义、词数统计。
+- 单词状态匹配现在会同时考虑 `expression`、`surface` 与 `aliases`，对旧 frontmatter 数据与不同词形更友好。
 - 点击或划选单词可直接进入查词和采词流程。
 - 阅读到最后一页后可标记为学习完成，并回写完成状态到 frontmatter。
 
@@ -115,6 +116,7 @@ obsidian-language-learner
   - 机器翻译
   - 词数统计
   - hover definition
+  - `Only Use Word Files Database` 下兼容旧 frontmatter 数据格式与更稳的阅读模式状态匹配
 - `AI & Advanced`
   - provider
   - `api_url`
@@ -144,6 +146,7 @@ obsidian-language-learner
 
 - 在学习面板中确认释义、状态、标签、笔记和例句。
 - 提交后会写入数据库。
+- `surface` 会参与阅读模式中的单词状态匹配与即时刷新。
 - 如果启用了自动刷新，会继续更新文本数据库。
 
 ## 🛠️ 本地开发

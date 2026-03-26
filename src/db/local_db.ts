@@ -133,7 +133,7 @@ export class LocalDb extends DbProvider {
                 .then(expressions => {
                     return expressions.flatMap(expr => {
                         return expr.aliases
-                            .filter(alias => payload.words.includes(alias))
+                            .filter(alias => payload.words.includes(alias.toLowerCase()))
                             .map(alias => ({
                                 expression: alias,
                                 status: expr.status
@@ -146,6 +146,12 @@ export class LocalDb extends DbProvider {
                 const key = expr.expression.toLowerCase();
                 if (!wordMap.has(key)) {
                     wordMap.set(key, { text: expr.expression, status: expr.status } as Word);
+                }
+                if (expr.surface) {
+                    const surfaceKey = expr.surface.toLowerCase();
+                    if (payload.words.includes(surfaceKey) && !wordMap.has(surfaceKey)) {
+                        wordMap.set(surfaceKey, { text: expr.surface, status: expr.status } as Word);
+                    }
                 }
             });
             storedWordsMeaning.forEach(expr => {

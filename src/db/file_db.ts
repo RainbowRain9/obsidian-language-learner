@@ -152,6 +152,12 @@ export class FileDb extends DbProvider {
                 if (!wordMap.has(key)) {
                     wordMap.set(key, { text: expr.expression, status: expr.status } as Word);
                 }
+                if (expr.surface) {
+                    const surfaceKey = expr.surface.toLowerCase();
+                    if (payload.words.includes(surfaceKey) && !wordMap.has(surfaceKey)) {
+                        wordMap.set(surfaceKey, { text: expr.surface, status: expr.status } as Word);
+                    }
+                }
             });
 
             const aliasCache = await this.getAliasCache();
@@ -169,18 +175,24 @@ export class FileDb extends DbProvider {
             wordsinfo.forEach(expr => {
                 if (expr.aliases?.length) {
                     expr.aliases.forEach(word => {
-                        if (payload.words.includes(word)) {
-                            const key = word.toLowerCase();
-                            if (!wordMap.has(key)) {
-                                wordMap.set(key, { text: word, status: expr.status } as Word);
+                        const normalizedWord = word.toLowerCase();
+                        if (payload.words.includes(normalizedWord)) {
+                            if (!wordMap.has(normalizedWord)) {
+                                wordMap.set(normalizedWord, { text: word, status: expr.status } as Word);
                             }
                         }
                     });
                 }
-                if (payload.words.includes(expr.expression)) {
-                    const key = expr.expression.toLowerCase();
-                    if (!wordMap.has(key)) {
-                        wordMap.set(key, { text: expr.expression, status: expr.status } as Word);
+                const normalizedExpression = expr.expression.toLowerCase();
+                if (payload.words.includes(normalizedExpression)) {
+                    if (!wordMap.has(normalizedExpression)) {
+                        wordMap.set(normalizedExpression, { text: expr.expression, status: expr.status } as Word);
+                    }
+                }
+                if (expr.surface) {
+                    const normalizedSurface = expr.surface.toLowerCase();
+                    if (payload.words.includes(normalizedSurface) && !wordMap.has(normalizedSurface)) {
+                        wordMap.set(normalizedSurface, { text: expr.surface, status: expr.status } as Word);
                     }
                 }
             });
@@ -202,10 +214,12 @@ export class FileDb extends DbProvider {
             if (!expr) {
                 const exprLower = expression.toLowerCase();
                 var wordsinfo = await this.plugin.parserAllFM();
-                return wordsinfo.find(word =>
-                    word.expression?.toLowerCase() === exprLower ||
-                    word.aliases?.some(alias => alias?.toLowerCase() === exprLower)
-                ) || null;
+                return wordsinfo.find(word => {
+                    const aliases = Array.isArray(word.aliases) ? word.aliases : [];
+                    return word.expression?.toLowerCase() === exprLower ||
+                        word.surface?.toLowerCase() === exprLower ||
+                        aliases.some(alias => alias?.toLowerCase() === exprLower);
+                }) || null;
             }
         }
 
@@ -249,7 +263,12 @@ export class FileDb extends DbProvider {
             }) as ExpressionInfoSimple[];
 
         let exprs2 = (await this.plugin.parserAllFM())
-            .filter(word => expressions.includes(word.expression) || word.aliases.some(alias => expressions.includes(alias)))
+            .filter(word => {
+                const aliases = Array.isArray(word.aliases) ? word.aliases : [];
+                return expressions.includes(word.expression.toLowerCase()) ||
+                    (word.surface ? expressions.includes(word.surface.toLowerCase()) : false) ||
+                    aliases.some(alias => expressions.includes(alias.toLowerCase()));
+            })
             .map(v => {
                 return {
                     expression: v.expression,
@@ -270,7 +289,12 @@ export class FileDb extends DbProvider {
     async getExprall(expressions: string[]): Promise<ExpressionInfo[]> {
         expressions = expressions.map(expression => expression.toLowerCase());
         return (await this.plugin.parserAllFM())
-            .filter(word => expressions.includes(word.expression) || word.aliases.some(alias => expressions.includes(alias)));
+            .filter(word => {
+                const aliases = Array.isArray(word.aliases) ? word.aliases : [];
+                return expressions.includes(word.expression.toLowerCase()) ||
+                    (word.surface ? expressions.includes(word.surface.toLowerCase()) : false) ||
+                    aliases.some(alias => expressions.includes(alias.toLowerCase()));
+            });
     }
 
 

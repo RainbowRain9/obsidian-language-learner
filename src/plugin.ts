@@ -47,6 +47,21 @@ export const FRONT_MATTER_KEY: string = "langr";
 
 export var imgnum: string = localStorage.getItem('imgnum') || '';
 
+function normalizeStringArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return value
+            .filter((item): item is string => typeof item === "string")
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed ? [trimmed] : [];
+    }
+
+    return [];
+}
 
 const statusMap = [
     t("Ignore"),
@@ -55,6 +70,38 @@ const statusMap = [
     t("Known"),
     t("Learned"),
 ];
+
+function normalizeStatusValue(value: unknown): number {
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < statusMap.length) {
+        return value;
+    }
+
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return 0;
+        }
+
+        const numeric = Number(trimmed);
+        if (Number.isInteger(numeric) && numeric >= 0 && numeric < statusMap.length) {
+            return numeric;
+        }
+
+        const normalized = trimmed.toLowerCase();
+        const englishStatuses = ["ignore", "learning", "familiar", "known", "learned"];
+        const englishIndex = englishStatuses.indexOf(normalized);
+        if (englishIndex >= 0) {
+            return englishIndex;
+        }
+
+        const localizedIndex = statusMap.findIndex(status => status.toLowerCase() === normalized);
+        if (localizedIndex >= 0) {
+            return localizedIndex;
+        }
+    }
+
+    return 0;
+}
 
 export default class LanguageLearner extends Plugin {
     constants: { basePath: string; platform: "mobile" | "desktop"; };
@@ -165,6 +212,7 @@ export default class LanguageLearner extends Plugin {
     private invalidateParserAllFMCache() {
         this.parserAllFMDirty = true;
         this.parserAllFMCache = null;
+        this.parser?.invalidateCache?.();
     }
 
     async openDB() {
@@ -563,6 +611,14 @@ export default class LanguageLearner extends Plugin {
         data.sort((a, b) => a.expression.localeCompare(b.expression));
 
         let newText = data.map((word) => {
+            const reviewPrompt = (word.surface || word.expression).trim();
+            const hasDistinctSurface =
+                !!word.surface &&
+                word.surface.trim().toLowerCase() !== word.expression.trim().toLowerCase();
+            const answer = [
+                hasDistinctSurface ? `**Expression**: ${word.expression}` : "",
+                word.meaning.trim(),
+            ].filter(Boolean).join("\n");
             let notes = word.notes.length === 0
                 ? ""
                 : "**Notes**:\n" + word.notes.join("\n").trim() + "\n";
@@ -579,12 +635,14 @@ export default class LanguageLearner extends Plugin {
 
             return (
                 `#word\n` +
-                `#### ${word.expression}\n` +
+                `#### ${reviewPrompt}\n` +
                 `${this.settings.review_delimiter}\n` +
-                `${word.meaning}\n` +
+                `${answer}\n` +
                 `${notes}` +
                 `${sentences}` +
-                (oldRecord[word.expression] ? oldRecord[word.expression] + "\n" : "")
+                ((oldRecord[reviewPrompt] || oldRecord[word.expression])
+                    ? (oldRecord[reviewPrompt] || oldRecord[word.expression]) + "\n"
+                    : "")
             );
         }).join("\n");
 
@@ -1288,15 +1346,19 @@ export default class LanguageLearner extends Plugin {
                 sentences.push(newSentence);
             } else { break; }
         }
+        const normalizedTags = normalizeStringArray(tags);
+        const normalizedNotes = normalizeStringArray(notes);
+        const normalizedAliases = normalizeStringArray(aliases);
+        const normalizedStatus = normalizeStatusValue(status);
         var expressioninfo: ExpressionInfo = {
             expression: expression,
             surface: surface || undefined,
             meaning: meaning,
-            status: statusMap.indexOf(status),
+            status: normalizedStatus >= 0 ? normalizedStatus : 0,
             t: type,
-            tags: tags,
-            notes: notes,
-            aliases: aliases,
+            tags: normalizedTags,
+            notes: normalizedNotes,
+            aliases: normalizedAliases,
             date: moment.utc(date).unix(),
             sentences: sentences,
         }

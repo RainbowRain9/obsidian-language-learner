@@ -26,6 +26,7 @@ interface EventMap extends GlobalEventHandlersEventMap {
     }>;
     "obsidian-langr-refresh": CustomEvent<{
         expression: string,
+        surface?: string,
         type: string,
         status: number,
         meaning: string,

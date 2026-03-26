@@ -179,12 +179,16 @@ export class ReadingView extends TextFileView {
     // 新词面板中提交后，刷新阅读页面中单词的状态
     refresh = (evt?: CustomEvent) => {
         let expression: string = evt.detail.expression.toLowerCase().trim();
+        let surface: string = (evt.detail.surface || "").toLowerCase().trim();
         let type: string = evt.detail.type;
         let status: number = evt.detail.status;
         let meaning: string = evt.detail.meaning;
         let aliases: string[] = (evt.detail.aliases || [])
             .map((alias: string) => alias?.toLowerCase().trim())
             .filter((alias: string) => alias);
+        if (surface && !aliases.includes(surface)) {
+            aliases.push(surface);
+        }
         const statusMap = ["ignore", "learning", "familiar", "known", "learned"];
         if (type === "WORD") {
             let wordEls = this.contentEl.querySelectorAll(".word"); //全文中的word元素

@@ -380,6 +380,7 @@ async function submit() {
 			new CustomEvent("obsidian-langr-refresh", {
 				detail: {
 					expression: data.expression,
+					surface: data.surface,
 					type: data.t,
 					status: data.status,
 					meaning: data.meaning,
