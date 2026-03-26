@@ -4,7 +4,27 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Fixed
+
+- 修复 GitHub Release workflow 在 `CHANGELOG.md` 缺少当前版本节时直接失败的问题。
+- `scripts/extract-changelog-section.mjs` 现在会优先读取当前版本节；如果缺失，则回退到 `Unreleased`，再不行则生成占位 release notes，避免发布流程被中断。
+
+## [0.5.9] - 2026-03-27
+
+### Added
+
+- 设置页 `General` 新增 `Meaning Autofill` 选项，可在关闭、贴近原文翻译、词典词性摘要、按上下文选择词性之间切换。
+- 学习面板会从有道词典基础释义区自动提取词形变化，并回填到 `aliases`。
+
+### Changed
+
+- 采词时 `expression` 现在优先使用 Cambridge 词典显示的 headword，其次才回退到有道标题和词形还原规则。
+- `meaning` 自动填充改为按模式统一决策，不再让不同来源并行抢写；上下文模式会尽量只回填当前词性的释义。
+- GitHub Release 流程现在会把当前版本对应的 `CHANGELOG.md` 版本节写入 Release 正文前缀，方便直接复用发布前的更新说明。
+
+### Fixed
+
+- 修复同一句中同时出现不同词形或同 lemma 不同用法时，已有词条的 `surface` 覆盖当前点击词面的情况，减少 `issued` / `issue` 这类串义。
 
 ## [0.5.8] - 2026-03-26
 
@@ -12,7 +32,6 @@
 
 - 学习面板暂时移除了 `AI Autofill` 按钮和对应入口，避免兼容端点返回空内容时打断采词流程。
 - AI 设置页不再显示 `Card Prompt` 配置项；当前保留的 AI 配置主要用于词典释义、语境释义和句子翻译。
-- GitHub Release 流程现在会把当前版本对应的 `CHANGELOG.md` 版本节写入 Release 正文前缀，方便直接复用发布前的 `Unreleased` 内容。
 
 ### Fixed
 

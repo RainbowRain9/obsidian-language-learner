@@ -35,9 +35,13 @@
 
 - 查询后可直接进入右侧学习面板。
 - 会根据已有词条、词典结果和当前上下文预填 `expression`、`surface`、`meaning`、`status`、`type`、`aliases` 和 `sentences`；已有词条也会回填 `tags` / `notes`。
+- `expression` 会优先采用 Cambridge 词典显示的主词条，再回退到有道和词形还原结果。
+- `aliases` 会继续合并已有词条和规则推断结果，并额外从有道词典提取第三人称单数、现在分词、过去式、过去分词等基础词形。
+- `meaning` 自动填充支持多种策略：关闭、贴近原文翻译、词典词性摘要、按上下文选择词性。
 - 阅读模式和普通划词都会尽量自动写入例句与出处。
 - 例句支持机器翻译和 AI 翻译。
 - 学习面板当前仅保留手动确认后提交，不再提供单独的 `AI Autofill` 词卡补全按钮。
+- 当同一句里同时出现不同词形或同 lemma 的不同用法时，学习面板会优先保留当前点击到的 `surface`，避免旧词条把当前词面覆盖掉。
 
 ### 阅读模式
 
@@ -103,6 +107,7 @@ obsidian-language-learner
   - popup search
   - 自动发音
   - 划词功能键
+  - `Meaning Autofill`
 - `Dictionaries`
   - 启用词典
   - 调整优先级
@@ -162,6 +167,8 @@ obsidian-language-learner
 - 在学习面板中确认释义、状态、标签、笔记和例句。
 - 提交后会写入数据库。
 - `surface` 会参与阅读模式中的单词状态匹配与即时刷新。
+- 如果希望 `meaning` 更贴近句子原文，可以把 `Meaning Autofill` 设为 `Closest context translation`。
+- 如果希望 `meaning` 自动补上 `n.` / `v.` 这类词性前缀，可以把 `Meaning Autofill` 设为 `Dictionary POS summary` 或 `Context-selected POS`。
 - 如果启用了自动刷新，会继续更新文本数据库。
 
 ## 🛠️ 本地开发
@@ -281,6 +288,14 @@ package.json.version
    - 把 `Unreleased` 归档为对应版本节
 5. GitHub Actions 创建 Release 时，会把当前版本对应的 `CHANGELOG.md` 版本节作为正文前缀写入 Release 页面，再附加自动生成的 release notes。
 
+如果 `CHANGELOG.md` 里暂时还没有当前版本节，release workflow 会按下面的顺序回退：
+
+1. 当前版本节，例如 `## [0.5.9]`
+2. `## [Unreleased]`
+3. 固定占位说明，再附加 GitHub 自动生成的 release notes
+
+这样可以避免因为 changelog 尚未归档到精确版本节而导致整个 Release job 失败。
+
 ### 自动执行内容
 
 发布 workflow 会自动：
@@ -291,8 +306,9 @@ package.json.version
 4. 执行 `npm ci`。
 5. 执行 `npm run build`。
 6. 从 `.build/plugin/` 收集发布文件。
-7. 自动创建或更新 GitHub Release。
-8. 自动上传以下资产：
+7. 从 `CHANGELOG.md` 提取 release notes；如果没有精确版本节，会自动回退到 `Unreleased` 或占位说明。
+8. 自动创建或更新 GitHub Release。
+9. 自动上传以下资产：
    - `main.js`
    - `manifest.json`
    - `styles.css`
