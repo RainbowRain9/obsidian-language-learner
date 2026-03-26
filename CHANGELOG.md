@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 暂无待发布更新。
+
+## [0.5.4] - 2026-03-26
+
 ### Added
 
 - 采词流程新增 `surface` 原始词形字段，并持久化到 IndexedDB 与 Word Files Database frontmatter。
