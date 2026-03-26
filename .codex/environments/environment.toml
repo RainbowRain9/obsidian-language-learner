@@ -9,3 +9,11 @@ script = ""
 name = "运行"
 icon = "run"
 command = "npm run build"
+
+[[actions]]
+name = "推送标签"
+icon = "tool"
+command = '''
+npm run release:patch
+npm run release:push
+'''
