@@ -26,13 +26,19 @@
     ]
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    "**/*.vue"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.vue",
+    "shims.d.ts"
   ],
   "exclude": [
     "backup_*",
-    "node_modules"
+    "node_modules",
+    "obsidian-yolo",
+    ".build",
+    "docs",
+    "references",
+    "public"
   ]
   // "vueCompilerOptions": {
   //   "target": 3,
