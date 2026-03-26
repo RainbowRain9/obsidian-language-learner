@@ -4,7 +4,14 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Added
+
+- AI 词典现在会在有句子上下文时生成更贴合当前语境的释义，并在面板中展示语境句和来源。
+- 学习面板新增 `AI Autofill`，可基于当前词条与上下文补全 `meaning`、`aliases`、`tags` 和 `notes`。
+
+### Changed
+
+- AI 设置新增 `Context Prompt` 和 `Card Prompt`，分别用于语境释义和词卡补全。
 
 ## [0.5.6] - 2026-03-26
 

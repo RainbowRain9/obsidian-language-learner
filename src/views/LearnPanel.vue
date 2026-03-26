@@ -127,9 +127,27 @@
 			</div>
 			</NForm>
 			<!-- 提交按钮 -->
-			<div style="margin-top: 10px">
-				<NButton size="small" style="--n-width: 100%" attr-type="submit" @click="submit"
-					:loading="submitLoading">{{ t("Submit") }}</NButton>
+			<div class="footer-actions">
+				<NButton
+					size="small"
+					secondary
+					class="footer-action-btn"
+					@click="autofillWithAI"
+					:loading="autofillLoading"
+					:disabled="submitLoading"
+				>
+					{{ t("AI Autofill") }}
+				</NButton>
+				<NButton
+					size="small"
+					class="footer-action-btn"
+					attr-type="submit"
+					@click="submit"
+					:loading="submitLoading"
+					:disabled="autofillLoading"
+				>
+					{{ t("Submit") }}
+				</NButton>
 			</div>
 			<!-- </NThemeEditor> -->
 		</NConfigProvider>
@@ -173,7 +191,7 @@ import { ReadingView } from "./ReadingView";
 import Plugin from "@/plugin";
 import { search as youdaoSearch, YoudaoResultLex } from "@dict/youdao/engine";
 import { search as googleTranslate } from "@dict/google/engine";
-import { translate as aiTranslate } from "@dict/ai/engine";
+import { autofillExpression as aiAutofillExpression, translate as aiTranslate } from "@dict/ai/engine";
 import store from "@/store";
 
 const view: LearnPanelView =
@@ -303,6 +321,7 @@ async function tagSearch(query: string) {
 
 // 提交信息到数据库的加载状态
 let submitLoading = ref(false);
+let autofillLoading = ref(false);
 
 function normalizeWordValue(value?: string | null): string {
 	return (value || "").trim().toLowerCase();
@@ -337,6 +356,98 @@ function aliasesToInputValue(value: string[] | string | null | undefined): strin
 		return value.join(", ");
 	}
 	return value || "";
+}
+
+function mergeUniqueTextList(existing: string[] = [], incoming: string[] = []): string[] {
+	const seen = new Set<string>();
+	const merged: string[] = [];
+
+	[...existing, ...incoming].forEach((item) => {
+		if (typeof item !== "string") {
+			return;
+		}
+
+		const trimmed = item.trim();
+		const dedupeKey = trimmed.toLowerCase();
+		if (!trimmed || seen.has(dedupeKey)) {
+			return;
+		}
+
+		seen.add(dedupeKey);
+		merged.push(trimmed);
+	});
+
+	return merged;
+}
+
+function getPrimarySentence(): Sentence | null {
+	return dedupeSentences(model.value.sentences || []).find((sentence) => sentence.text) || null;
+}
+
+async function autofillWithAI() {
+	if (!model.value.expression) {
+		new Notice(t("Expression is empty!"));
+		return;
+	}
+
+	if (!plugin.settings.ai.api_key?.trim()) {
+		new Notice(t("Please configure an API key in settings"));
+		return;
+	}
+
+	autofillLoading.value = true;
+	try {
+		normalizeCurrentModelSentences();
+
+		const expression = (model.value.expression || "").trim();
+		const normalizedExpression = normalizeWordValue(expression);
+		const normalizedSurface = normalizeSurfaceValue(model.value.surface || expression);
+		const primarySentence = getPrimarySentence();
+		const existingAliases = normalizeAliasesValue(
+			model.value.aliases,
+			normalizedExpression,
+			normalizedSurface
+		);
+
+		const result = await aiAutofillExpression(
+			{
+				expression,
+				surface: (model.value.surface || expression || "").trim(),
+				type: model.value.t,
+				sentenceText: primarySentence?.text,
+				origin: primarySentence?.origin,
+				existingMeaning: cleanMeaningText(model.value.meaning),
+				existingAliases,
+				existingTags: model.value.tags || [],
+				existingNotes: model.value.notes || [],
+				nativeLanguage: plugin.settings.native,
+				foreignLanguage: plugin.settings.foreign,
+			},
+			plugin.settings
+		);
+
+		if (result.meaning) {
+			model.value.meaning = cleanMeaningText(result.meaning);
+		}
+
+		model.value.aliases = aliasesToInputValue(
+			normalizeAliasesValue(
+				model.value.aliases,
+				normalizedExpression,
+				normalizedSurface,
+				result.aliases
+			)
+		);
+		model.value.tags = mergeUniqueTextList(model.value.tags || [], result.tags);
+		model.value.notes = mergeUniqueTextList(model.value.notes || [], result.notes);
+
+		new Notice(t("AI autofill applied"));
+	} catch (e: any) {
+		new Notice(e?.message || t("AI autofill failed"));
+		console.error(e);
+	} finally {
+		autofillLoading.value = false;
+	}
 }
 
 async function submit() {
@@ -787,6 +898,16 @@ watch(() => model.value, () => {
 
 	.n-input {
 		margin: 1px 0;
+	}
+
+	.footer-actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 10px;
+	}
+
+	.footer-action-btn {
+		flex: 1;
 	}
 
     /* 隐藏默认的按钮组（如果还有残留） */

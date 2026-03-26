@@ -58,7 +58,9 @@ export interface MyPluginSettings {
         api_url: string;
         model: string;
         prompt: string;
+        context_prompt: string;
         trans_prompt: string;
+        card_prompt: string;
     };
     // ui
     activeTab: string;
@@ -123,7 +125,9 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
         api_url: "https://api.openai.com/v1/chat/completions",
         model: "gpt-4o-mini",  // 使用 GPT-4o-mini（更快、更便宜）
         prompt: "You are a helpful English learning assistant. Explain the meaning of words clearly and provide examples.",
-        trans_prompt: "Translate the following sentence into Chinese accurately and naturally: {sentence}"
+        context_prompt: "You are a helpful English learning assistant. Explain the selected word or phrase in the given sentence. Focus on its meaning in this exact context, then give a concise general meaning and one short usage note. Use markdown.",
+        trans_prompt: "Translate the following sentence into Chinese accurately and naturally: {sentence}",
+        card_prompt: "You are a helpful English learning assistant. Fill a learner's vocabulary card from the selected expression and optional context. Return only valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}. Keep the meaning concise, aliases practical, tags short, and notes useful for study."
     },
     activeTab: "general"
 };
@@ -365,6 +369,28 @@ export class SettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.ai.trans_prompt)
                 .onChange(async (value) => {
                     this.plugin.settings.ai.trans_prompt = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName(t("Context Prompt"))
+            .setDesc(t("Prompt for contextual explanation when sentence context is available."))
+            .addTextArea(text => text
+                .setValue(this.plugin.settings.ai.context_prompt)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.context_prompt = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName(t("Card Prompt"))
+            .setDesc(t("Prompt for AI autofill. Return JSON for meaning, aliases, tags, and notes."))
+            .addTextArea(text => text
+                .setValue(this.plugin.settings.ai.card_prompt)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.card_prompt = value;
                     await this.plugin.saveSettings();
                 })
             );

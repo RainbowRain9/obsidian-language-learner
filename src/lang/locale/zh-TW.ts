@@ -179,5 +179,15 @@ export default {
     "As Server": "成為伺服器",
     "Self as Server": "開啟伺服器功能",
     "Make plugin a server and interact with chrome extension": "外掛開啟一個伺服器提供API，由此可以與Google瀏覽器外掛互動",
-    "when changing port, you should restart the server": "如果改變埠，請重啟伺服器"
+    "when changing port, you should restart the server": "如果改變埠，請重啟伺服器",
+    "AI Autofill": "AI 補全",
+    "AI autofill applied": "AI 補全已套用",
+    "AI autofill failed": "AI 補全失敗",
+    "AI autofill returned invalid JSON": "AI 補全回傳了無效的 JSON",
+    "Context Prompt": "語境提示詞",
+    "Prompt for contextual explanation when sentence context is available.": "當存在句子語境時，用於語境解釋的提示詞。",
+    "Card Prompt": "詞卡補全提示詞",
+    "Prompt for AI autofill. Return JSON for meaning, aliases, tags, and notes.": "用於 AI 補全詞卡的提示詞。請回傳包含 meaning、aliases、tags、notes 的 JSON。",
+    "Context": "語境",
+    "Source": "來源"
 }

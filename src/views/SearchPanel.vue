@@ -21,7 +21,12 @@
         <div class="dict-area">
             <DictItem v-for="(cp, i) in components" :loading="loadings[i]" :name="cp.name" :id="cp.id">
                 <KeepAlive>
-                    <Component @loading="loading" :is="cp.type" :word="word" v-show="shows[i]"></Component>
+                    <Component
+                        @loading="loading"
+                        :is="cp.type"
+                        v-bind="getComponentProps(cp.id)"
+                        v-show="shows[i]"
+                    ></Component>
                 </KeepAlive>
             </DictItem>
         </div>
@@ -36,13 +41,20 @@ import { currentLanguageRef, t } from "@/lang/helper";
 import PluginType from "@/plugin";
 import { dicts } from "@dict/list";
 import { playAudio } from "@/utils/helpers";
+import type { SearchContext } from "@/constant";
 
 const plugin = getCurrentInstance().appContext.config.globalProperties.plugin as PluginType;
+
+type SearchHistoryEntry = {
+    word: string;
+    context: SearchContext;
+};
 
 let components = ref([]);
 let map: { [K in string]: number } = {};
 let loadings = ref<boolean[]>([]);
 let shows = ref<boolean[]>([]);
+const searchContext = ref<SearchContext>({});
 watch([() => plugin.store.dictsChange, () => currentLanguageRef.value], () => {
     let collection = Object.keys(plugin.settings.dictionaries)
         .map((dict: keyof typeof dicts) => {
@@ -83,22 +95,33 @@ function loading({ id, loading, result }: { id: string, loading: boolean, result
 }
 
 // 提供一个前进后退查询记录的功能
-let history: string[] = [];
+let history: SearchHistoryEntry[] = [];
 let lastHistory = ref(history.length - 1);
 let historyIndex = ref(-1);
+
+function applyHistoryEntry(entry?: SearchHistoryEntry) {
+    if (!entry) {
+        return;
+    }
+
+    word.value = entry.word;
+    inputWord.value = entry.word;
+    searchContext.value = { ...entry.context };
+}
+
 function switchHistory(direction: "prev" | "next") {
     historyIndex.value = Math.max(
         0,
         Math.min(historyIndex.value + (direction === "prev" ? -1 : 1), history.length - 1)
     );
-    word.value = history[historyIndex.value];
-    inputWord.value = history[historyIndex.value];
+    applyHistoryEntry(history[historyIndex.value]);
 }
-function appendHistory() {
+
+function appendHistory(entry: SearchHistoryEntry) {
     if (historyIndex.value < history.length - 1) {
         history = history.slice(0, historyIndex.value + 1);
     }
-    history.push(word.value);
+    history.push(entry);
     lastHistory.value = history.length - 1;
     historyIndex.value++;
 }
@@ -106,14 +129,25 @@ function appendHistory() {
 let inputWord = ref("");
 let word = ref("");
 const onSearch = async (evt: CustomEvent) => {
-    let text = evt.detail.selection;
-    word.value = text;
-    appendHistory();
+    const text = evt.detail.selection;
+    const entry: SearchHistoryEntry = {
+        word: text,
+        context: {
+            sentenceText: evt.detail.sentenceText,
+            origin: evt.detail.origin,
+        },
+    };
+    applyHistoryEntry(entry);
+    appendHistory(entry);
 };
 
 function handleSearch() {
-    word.value = inputWord.value;
-    appendHistory();
+    const entry: SearchHistoryEntry = {
+        word: inputWord.value,
+        context: {},
+    };
+    applyHistoryEntry(entry);
+    appendHistory(entry);
 }
 
 function handleClick(evt: MouseEvent) {
@@ -128,10 +162,27 @@ function handleClick(evt: MouseEvent) {
     else if (target.tagName === "A") {
         evt.preventDefault();
         evt.stopPropagation();
-        word.value = target.textContent;
-        inputWord.value = target.textContent;
-        appendHistory();
+        const entry: SearchHistoryEntry = {
+            word: target.textContent || "",
+            context: {},
+        };
+        applyHistoryEntry(entry);
+        appendHistory(entry);
     }
+}
+
+function getComponentProps(id: string) {
+    if (id === "ai") {
+        return {
+            word: word.value,
+            sentenceText: searchContext.value.sentenceText || "",
+            origin: searchContext.value.origin || "",
+        };
+    }
+
+    return {
+        word: word.value,
+    };
 }
 
 
