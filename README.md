@@ -29,20 +29,22 @@
 
 - 支持 OpenAI-compatible 接口。
 - 已验证的配置方向包括 `OpenAI`、`Gemini`、`DeepSeek`、`SiliconFlow` 和自定义兼容端点。
-- 支持 AI 释义、AI 翻译、自定义 `prompt` 和 `trans_prompt`。
+- 支持 AI 释义、AI 翻译、自定义 `prompt`、`context_prompt` 和 `trans_prompt`。
 
 ### 生词采集
 
 - 查询后可直接进入右侧学习面板。
-- 自动预填词条信息：`expression`、`meaning`、`status`、`type`、`aliases`、`tags`、`notes`、`sentences`。
+- 会根据已有词条、词典结果和当前上下文预填 `expression`、`surface`、`meaning`、`status`、`type`、`aliases` 和 `sentences`；已有词条也会回填 `tags` / `notes`。
 - 阅读模式和普通划词都会尽量自动写入例句与出处。
 - 例句支持机器翻译和 AI 翻译。
+- 学习面板当前仅保留手动确认后提交，不再提供单独的 `AI Autofill` 词卡补全按钮。
 
 ### 阅读模式
 
 - 为带 `langr` frontmatter 的笔记提供专门的 Reading View。
 - 支持分页阅读、单词高亮、短语识别、悬停释义、词数统计。
 - 单词状态匹配现在会同时考虑 `expression`、`surface` 与 `aliases`，对旧 frontmatter 数据与不同词形更友好。
+- 正文中使用 Markdown 分割线 `---` 不会再导致 Reading View 空白或打开失败。
 - 点击或划选单词可直接进入查词和采词流程。
 - 阅读到最后一页后可标记为学习完成，并回写完成状态到 frontmatter。
 
@@ -126,6 +128,7 @@ obsidian-language-learner
   - `api_key`
   - `model`
   - `prompt`
+  - `context_prompt`
   - `trans_prompt`
   - 连接测试
 
