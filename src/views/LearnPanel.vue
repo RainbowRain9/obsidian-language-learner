@@ -173,11 +173,13 @@ import {
 
 import { ExpressionInfo, Sentence } from "@/db/interface";
 import { t } from "@/lang/helper";
+import type { MeaningAutofillMode } from "@/settings";
 import { useEvent } from "@/utils/use";
 import { analyzeWordSelection } from "@/utils/word-analysis";
 import { LearnPanelView } from "./LearnPanelView";
 import { ReadingView } from "./ReadingView";
 import Plugin from "@/plugin";
+import { search as cambridgeSearch } from "@dict/cambridge/engine";
 import { search as youdaoSearch, YoudaoResultLex } from "@dict/youdao/engine";
 import { search as googleTranslate } from "@dict/google/engine";
 import { translate as aiTranslate } from "@dict/ai/engine";
@@ -320,6 +322,47 @@ function normalizeSurfaceValue(value?: string | null): string | undefined {
 	return normalized || undefined;
 }
 
+function escapeWordPattern(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function countStandaloneWordOccurrences(text?: string | null, word?: string | null): number {
+	const normalizedText = normalizeWordValue(text);
+	const normalizedWord = normalizeWordValue(word);
+	if (!normalizedText || !normalizedWord) {
+		return 0;
+	}
+
+	const pattern = new RegExp(
+		`(^|[^a-z'-])${escapeWordPattern(normalizedWord)}(?=$|[^a-z'-])`,
+		"gi"
+	);
+	return Array.from(normalizedText.matchAll(pattern)).length;
+}
+
+function shouldSkipStoredExpressionMerge(
+	expr: ExpressionInfo,
+	currentSurface: string,
+	sentenceText: string
+): boolean {
+	const normalizedCurrentSurface = normalizeSurfaceValue(currentSurface);
+	const normalizedStoredSurface = normalizeSurfaceValue(expr.surface);
+
+	if (
+		!sentenceText ||
+		!normalizedCurrentSurface ||
+		!normalizedStoredSurface ||
+		normalizedCurrentSurface === normalizedStoredSurface
+	) {
+		return false;
+	}
+
+	return (
+		countStandaloneWordOccurrences(sentenceText, normalizedCurrentSurface) > 0 &&
+		countStandaloneWordOccurrences(sentenceText, normalizedStoredSurface) > 0
+	);
+}
+
 function normalizeAliasesValue(
 	value: string[] | string | null | undefined,
 	expression: string,
@@ -448,6 +491,39 @@ function clearPanel(){
 const selectionToken = ref(0);
 const GOOGLE_CONTEXT_MARKER_START = "[[";
 const GOOGLE_CONTEXT_MARKER_END = "]]";
+const CONTEXT_DETERMINERS = new Set([
+	"a", "an", "the", "this", "that", "these", "those",
+	"some", "any", "each", "every", "either", "neither", "no",
+	"another", "other", "such", "what", "which", "whose"
+]);
+const CONTEXT_POSSESSIVES = new Set([
+	"my", "your", "his", "her", "its", "our", "their"
+]);
+const CONTEXT_NUMBER_HINTS = new Set([
+	"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+	"many", "few", "several", "much", "more", "most", "less", "least"
+]);
+const CONTEXT_MODAL_HINTS = new Set([
+	"to", "will", "would", "can", "could", "may", "might", "must", "shall", "should",
+	"do", "does", "did", "be", "am", "is", "are", "was", "were", "been", "being",
+	"have", "has", "had"
+]);
+const CONTEXT_SUBJECT_HINTS = new Set([
+	"i", "you", "he", "she", "it", "we", "they", "who"
+]);
+const CONTEXT_OBJECT_HINTS = new Set([
+	"me", "you", "him", "her", "it", "us", "them", "this", "that", "these", "those"
+]);
+const CONTEXT_NOUN_FOLLOW_HINTS = new Set([
+	"of", "for", "with", "about", "over", "on", "in", "at", "from",
+	"that", "whether", "when", "where", "which", "who", "whom", "whose"
+]);
+
+interface YoudaoMeaningEntry {
+	pos: string;
+	meaning: string;
+	text: string;
+}
 
 function decodeHtmlEntities(input: string): string {
 	const textarea = document.createElement("textarea");
@@ -463,13 +539,280 @@ function decodeHtmlEntities(input: string): string {
 	return value;
 }
 
-function extractYoudaoTranslation(res: any): string {
+function normalizePosMeaningLine(text: string): string {
+	return cleanMeaningText(text).replace(/^([a-z]{1,6}\.)\s+/i, "$1");
+}
+
+function normalizePosKey(pos?: string | null): string {
+	const normalized = cleanMeaningText(pos).toLowerCase();
+	if (!normalized) return "";
+	if (normalized.startsWith("vt.") || normalized.startsWith("vi.") || normalized.startsWith("v.")) {
+		return "v.";
+	}
+	if (normalized.startsWith("n.")) return "n.";
+	if (normalized.startsWith("adj.")) return "adj.";
+	if (normalized.startsWith("adv.")) return "adv.";
+	if (normalized.startsWith("prep.")) return "prep.";
+	return normalized;
+}
+
+function extractYoudaoBasicMeaningEntries(res: any): YoudaoMeaningEntry[] {
+	const basicHtml = (res?.result as YoudaoResultLex | undefined)?.basic;
+	if (!basicHtml) return [];
+
+	const container = document.createElement("div");
+	container.innerHTML = basicHtml;
+	const items = Array.from(container.querySelectorAll("li"))
+		.map((item) => {
+			const line = normalizePosMeaningLine(item.textContent || "");
+			if (!line) return null;
+			const matched = line.match(/^([a-z]{1,6}\.)\s*(.+)$/i);
+			return {
+				pos: matched?.[1] || "",
+				meaning: matched?.[2] || line,
+				text: line,
+			} as YoudaoMeaningEntry;
+		})
+		.filter((item): item is YoudaoMeaningEntry => Boolean(item));
+
+	if (items.length > 0) {
+		return items;
+	}
+
+	const text = container.textContent?.replace(/\s+/g, " ").trim() || "";
+	if (!text) return [];
+
+	const line = normalizePosMeaningLine(decodeHtmlEntities(text));
+	return line
+		? [{
+			pos: line.match(/^([a-z]{1,6}\.)/i)?.[1] || "",
+			meaning: line.replace(/^([a-z]{1,6}\.)\s*/i, ""),
+			text: line,
+		}]
+		: [];
+}
+
+function extractYoudaoBasicMeaning(res: any): string {
+	return extractYoudaoBasicMeaningEntries(res)
+		.map((item) => item.text)
+		.join("；");
+}
+
+function extractYoudaoMeaningByPos(res: any, pos: string): string {
+	const normalizedPos = normalizePosKey(pos);
+	if (!normalizedPos) return "";
+
+	return extractYoudaoBasicMeaningEntries(res)
+		.filter((item) => normalizePosKey(item.pos) === normalizedPos)
+		.map((item) => item.text)
+		.join("；");
+}
+
+function extractYoudaoTranslationFallback(res: any): string {
 	if (!res || !(res.result as any)?.translation) return "";
 	const html = (res.result as any).translation as string;
 	const container = document.createElement("div");
 	container.innerHTML = html;
 	const text = container.textContent?.replace(/\s+/g, " ").trim() || "";
 	return text ? decodeHtmlEntities(text) : "";
+}
+
+function extractYoudaoMeaning(res: any): string {
+	return extractYoudaoBasicMeaning(res) || extractYoudaoTranslationFallback(res);
+}
+
+function extractCambridgeHeadword(res: any): string {
+	const firstEntryHtml = res?.result?.[0]?.html;
+	if (!firstEntryHtml) return "";
+
+	const container = document.createElement("div");
+	container.innerHTML = firstEntryHtml;
+	const text =
+		container.querySelector(".headword")?.textContent ||
+		container.querySelector(".di-title")?.textContent ||
+		"";
+
+	return normalizeWordValue(text);
+}
+
+function extractYoudaoBasicInflections(res: any): string[] {
+	const basicHtml = (res?.result as YoudaoResultLex | undefined)?.basic;
+	if (!basicHtml) return [];
+
+	const container = document.createElement("div");
+	container.innerHTML = basicHtml;
+
+	const inflectionText = Array.from(container.querySelectorAll(".additional"))
+		.map((item) => decodeHtmlEntities(item.textContent || ""))
+		.join(" ");
+	if (!inflectionText) return [];
+
+	return [...new Set(
+		(inflectionText.match(/[a-z]+(?:['-][a-z]+)*/gi) || [])
+			.map((word) => normalizeWordValue(word))
+			.filter((word) => word.length > 1)
+	)];
+}
+
+function prefixMeaningWithPos(meaning: string, pos: string): string {
+	const normalizedPos = normalizePosKey(pos);
+	const cleanedMeaning = cleanMeaningText(meaning).replace(/^[a-z]{1,6}\.\s*/i, "");
+	if (!cleanedMeaning) return "";
+	if (!normalizedPos) return cleanedMeaning;
+	return normalizePosMeaningLine(`${normalizedPos} ${cleanedMeaning}`);
+}
+
+function tokenizeSentenceWords(sentenceText: string): string[] {
+	return normalizeWordValue(sentenceText).match(/[a-z]+(?:['-][a-z]+)*/g) || [];
+}
+
+function looksLikeAdjectiveHint(word: string): boolean {
+	return /(?:al|ary|ed|ful|ic|ical|ish|ive|less|ory|ous|y)$/.test(word);
+}
+
+function looksLikeFiniteVerbHint(word: string): boolean {
+	return CONTEXT_MODAL_HINTS.has(word) || /(?:ed|ing|en|es|s)$/.test(word);
+}
+
+function inferContextualPos(selection: string, expression: string, sentenceText: string): string {
+	const surface = normalizeWordValue(selection);
+	const lemma = normalizeWordValue(expression);
+	if (!surface || surface.includes(" ")) return "";
+
+	if (surface !== lemma) {
+		if (/(ed|ing)$/.test(surface)) return "v.";
+		if (/ly$/.test(surface)) return "adv.";
+	}
+
+	const tokens = tokenizeSentenceWords(sentenceText);
+	if (!tokens.length) return "";
+
+	const indexes = tokens
+		.map((token, index) => token === surface ? index : -1)
+		.filter((index) => index >= 0);
+	let bestPos = "";
+	let bestScore = 0;
+
+	for (const index of indexes) {
+		const prev2 = tokens[index - 2] || "";
+		const prev = tokens[index - 1] || "";
+		const next = tokens[index + 1] || "";
+		const next2 = tokens[index + 2] || "";
+		let nounScore = 0;
+		let verbScore = 0;
+
+		if (
+			CONTEXT_DETERMINERS.has(prev) ||
+			CONTEXT_POSSESSIVES.has(prev) ||
+			CONTEXT_NUMBER_HINTS.has(prev)
+		) {
+			nounScore += 3;
+		}
+		if (looksLikeAdjectiveHint(prev)) {
+			nounScore += 1;
+		}
+		if (CONTEXT_DETERMINERS.has(prev2) && prev && !CONTEXT_MODAL_HINTS.has(prev)) {
+			nounScore += 1;
+		}
+		if (CONTEXT_NOUN_FOLLOW_HINTS.has(next)) {
+			nounScore += 2;
+		}
+		if (
+			looksLikeFiniteVerbHint(next) &&
+			(
+				CONTEXT_DETERMINERS.has(prev) ||
+				CONTEXT_NUMBER_HINTS.has(prev) ||
+				looksLikeAdjectiveHint(prev)
+			)
+		) {
+			nounScore += 2;
+		}
+
+		if (CONTEXT_MODAL_HINTS.has(prev)) {
+			verbScore += 3;
+		}
+		if (/ly$/.test(prev)) {
+			verbScore += 1;
+		}
+		if (
+			CONTEXT_SUBJECT_HINTS.has(prev) &&
+			next &&
+			!CONTEXT_NOUN_FOLLOW_HINTS.has(next)
+		) {
+			verbScore += 2;
+		}
+		if (
+			(
+				CONTEXT_DETERMINERS.has(next) ||
+				CONTEXT_OBJECT_HINTS.has(next) ||
+				CONTEXT_NUMBER_HINTS.has(next)
+			) &&
+			!CONTEXT_DETERMINERS.has(prev) &&
+			!CONTEXT_NUMBER_HINTS.has(prev)
+		) {
+			verbScore += 2;
+		}
+		if (CONTEXT_DETERMINERS.has(next) && CONTEXT_OBJECT_HINTS.has(next2)) {
+			verbScore += 1;
+		}
+
+		if (nounScore > verbScore && nounScore > bestScore) {
+			bestPos = "n.";
+			bestScore = nounScore;
+		}
+		if (verbScore > nounScore && verbScore > bestScore) {
+			bestPos = "v.";
+			bestScore = verbScore;
+		}
+	}
+
+	return bestPos;
+}
+
+function resolveMeaningAutofill(
+	mode: MeaningAutofillMode,
+	input: {
+		selection: string;
+		expression: string;
+		sentenceText: string;
+		formsResult: any;
+		translationResult: { sentenceTranslation: string; meaningTranslation: string } | null;
+	}
+): string {
+	const translationMeaning = cleanMeaningText(input.translationResult?.meaningTranslation);
+
+	switch (mode) {
+		case "off":
+			return "";
+		case "context-translation":
+			return translationMeaning || extractYoudaoTranslationFallback(input.formsResult) || extractYoudaoBasicMeaning(input.formsResult);
+		case "youdao-basic":
+			return extractYoudaoBasicMeaning(input.formsResult) || translationMeaning || extractYoudaoTranslationFallback(input.formsResult);
+		case "context-pos": {
+			const inferredPos = inferContextualPos(
+				input.selection,
+				input.expression,
+				input.sentenceText
+			);
+			if (inferredPos && translationMeaning) {
+				return prefixMeaningWithPos(translationMeaning, inferredPos);
+			}
+
+			const youdaoPosMeaning = extractYoudaoMeaningByPos(input.formsResult, inferredPos);
+			if (youdaoPosMeaning) {
+				return youdaoPosMeaning;
+			}
+
+			const entries = extractYoudaoBasicMeaningEntries(input.formsResult);
+			if (!inferredPos && entries.length === 1) {
+				return entries[0].text;
+			}
+
+			return translationMeaning || extractYoudaoBasicMeaning(input.formsResult) || extractYoudaoTranslationFallback(input.formsResult);
+		}
+		default:
+			return translationMeaning || extractYoudaoMeaning(input.formsResult);
+	}
 }
 
 function extractGoogleTranslation(res: any): string {
@@ -607,7 +950,8 @@ function mergeExpressionWithContext(
 	model.value = {
 		...currentModel,
 		...expr,
-		surface: expr.surface || currentModel.surface || "",
+		// Keep the current clicked form as the active surface for this context.
+		surface: currentModel.surface || expr.surface || "",
 		meaning: expr.meaning || currentModel.meaning || "",
 		sentences: dedupeSentences([...(currentModel.sentences || []), ...nextSentences]),
 		aliases: expr.aliases?.length ? expr.aliases.join(",") : currentModel.aliases || "",
@@ -672,10 +1016,14 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const storedSenPromise = sentenceText
 		? plugin.db.tryGetSen(sentenceText).catch((): null => null)
 		: Promise.resolve(null);
+	const cambridgePromise = exprType === "WORD"
+		? cambridgeSearch(selection).catch((): null => null)
+		: Promise.resolve(null);
 	const formsPromise = youdaoSearch(selection).catch((): null => null);
 	const translationPromise = plugin.settings.use_machine_trans
 		? translateMeaningWithContext(selection, sentenceText).catch((): null => null)
 		: Promise.resolve(null);
+	const meaningAutofillMode = plugin.settings.meaning_autofill_mode;
 
 	const isCurrent = () => selectionToken.value === token;
 	let storedExpressionApplied = false;
@@ -685,6 +1033,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		if (!expr || !isCurrent()) return;
 		const storedSen = sanitizeSentenceRecord(await storedSenPromise);
 		if (!isCurrent()) return;
+		if (shouldSkipStoredExpressionMerge(expr, selection, sentenceText)) return;
 		storedExpressionApplied = true;
 		mergeExpressionWithContext(expr, sentenceText, defaultOrigin, storedSen);
 	})();
@@ -692,14 +1041,18 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	void (async () => {
 		const res = await formsPromise;
 		if (!isCurrent()) return;
+		const cambridgeRes = await cambridgePromise;
+		if (!isCurrent()) return;
 		const lex = res?.result && (res.result as any).type === "lex"
 			? (res.result as YoudaoResultLex)
 			: null;
+		const cambridgeHeadword = extractCambridgeHeadword(cambridgeRes);
 		const wordInfo = analyzeWordSelection(
 			selection,
-			lex?.title,
+			cambridgeHeadword || lex?.title,
 			lex?.pattern
 		);
+		const youdaoInflections = extractYoudaoBasicInflections(res);
 
 		if (!storedExpressionApplied) {
 			for (const candidate of wordInfo.lookupCandidates) {
@@ -707,6 +1060,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 				if (!expr || !isCurrent()) continue;
 				const storedSen = sanitizeSentenceRecord(await storedSenPromise);
 				if (!isCurrent()) return;
+				if (shouldSkipStoredExpressionMerge(expr, selection, sentenceText)) continue;
 				storedExpressionApplied = true;
 				mergeExpressionWithContext(expr, sentenceText, defaultOrigin, storedSen);
 				break;
@@ -724,14 +1078,26 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 			model.value.aliases,
 			normalizedExpression,
 			normalizedSurface,
-			wordInfo.aliases
+			[...wordInfo.aliases, ...youdaoInflections]
 		);
 		model.value.aliases = aliasesToInputValue(mergedAliases);
 
 		if (!model.value.meaning) {
-			const youdaoMeaning = extractYoudaoTranslation(res);
-			if (youdaoMeaning) {
-				model.value.meaning = cleanMeaningText(youdaoMeaning);
+			const translationResult =
+				meaningAutofillMode === "context-translation" || meaningAutofillMode === "context-pos"
+					? await translationPromise
+					: null;
+			if (!isCurrent()) return;
+
+			const autofilledMeaning = resolveMeaningAutofill(meaningAutofillMode, {
+				selection,
+				expression: normalizedExpression || wordInfo.resolvedBaseExpression || selection,
+				sentenceText,
+				formsResult: res,
+				translationResult,
+			});
+			if (autofilledMeaning) {
+				model.value.meaning = cleanMeaningText(autofilledMeaning);
 			}
 		}
 	})();
@@ -739,9 +1105,6 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	void (async () => {
 		const res = await translationPromise;
 		if (!isCurrent()) return;
-		if (res?.meaningTranslation && !model.value.meaning) {
-			model.value.meaning = res.meaningTranslation;
-		}
 		if (!sentenceText || !res?.sentenceTranslation) return;
 		const sentences = model.value.sentences || [];
 		const targetSen = sentences.find((sen: any) => sen.text === sentenceText);

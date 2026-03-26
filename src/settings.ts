@@ -11,6 +11,12 @@ import store from "./store";
 // Import external CSS for settings panel
 import "./styles/settings.css";
 
+export type MeaningAutofillMode =
+    | "off"
+    | "context-translation"
+    | "youdao-basic"
+    | "context-pos";
+
 export interface MyPluginSettings {
     use_server: boolean;
     port: number;
@@ -24,6 +30,7 @@ export interface MyPluginSettings {
     popup_search: boolean;
     auto_pron: boolean;
     function_key: "ctrlKey" | "altKey" | "metaKey" | "disable";
+    meaning_autofill_mode: MeaningAutofillMode;
     dictionaries: { [K in string]: { enable: boolean, priority: number; } };
     dict_height: string;
     // reading
@@ -87,6 +94,7 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     popup_search: true,  // ✅ 划词弹出翻译
     auto_pron: true,  // ✅ 自动发音
     function_key: "ctrlKey",  // Ctrl 键辅助选择
+    meaning_autofill_mode: "context-translation",
     dictionaries: {
         "youdao": { enable: true, priority: 1 },  // 有道词典（中文友好）
         "cambridge": { enable: true, priority: 2 },  // 剑桥词典（权威）
@@ -551,6 +559,21 @@ export class SettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.function_key)
                 .onChange(async (value: "ctrlKey" | "altKey" | "metaKey" | "disable") => {
                     this.plugin.settings.function_key = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName(t("Meaning Autofill"))
+            .setDesc(t("Choose how the meaning field is auto-filled when searching"))
+            .addDropdown(dropdown => dropdown
+                .addOption("off", t("Disable"))
+                .addOption("context-translation", t("Closest context translation"))
+                .addOption("youdao-basic", t("Dictionary POS summary"))
+                .addOption("context-pos", t("Context-selected POS"))
+                .setValue(this.plugin.settings.meaning_autofill_mode)
+                .onChange(async (value: MeaningAutofillMode) => {
+                    this.plugin.settings.meaning_autofill_mode = value;
                     await this.plugin.saveSettings();
                 })
             );
