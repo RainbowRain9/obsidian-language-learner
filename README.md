@@ -29,7 +29,11 @@
 
 - 支持 OpenAI-compatible 接口。
 - 已验证的配置方向包括 `OpenAI`、`Gemini`、`DeepSeek`、`SiliconFlow` 和自定义兼容端点。
-- 支持 AI 释义、AI 翻译、自定义 `prompt`、`context_prompt` 和 `trans_prompt`。
+- 支持 AI 释义、AI 翻译、卡片自动填充。
+- AI 设置支持多 provider、多 model、按场景路由和按模型连接测试。
+- 支持全局默认模型，并可分别为查词、翻译、卡片自动填充指定覆盖模型。
+- 支持 `Capability Mode`、`Reasoning`、`Thinking` 和结构化 `Custom Parameters` 配置。
+- 如需查看完整配置说明，可参考：[`docs/ai_settings_usage.md`](./docs/ai_settings_usage.md)
 
 ### 生词采集
 
@@ -128,14 +132,9 @@ obsidian-language-learner
   - hover definition
   - `Only Use Word Files Database` 下兼容旧 frontmatter 数据格式与更稳的阅读模式状态匹配
 - `AI & Advanced`
-  - provider
-  - `api_url`
-  - `api_key`
-  - `model`
-  - `prompt`
-  - `context_prompt`
-  - `trans_prompt`
-  - 连接测试
+  - AI provider / model 管理
+  - AI 路由与 prompt 配置
+  - 连接测试与高级参数
 
 ### 界面语言
 
@@ -170,6 +169,21 @@ obsidian-language-learner
 - 如果希望 `meaning` 更贴近句子原文，可以把 `Meaning Autofill` 设为 `Closest context translation`。
 - 如果希望 `meaning` 自动补上 `n.` / `v.` 这类词性前缀，可以把 `Meaning Autofill` 设为 `Dictionary POS summary` 或 `Context-selected POS`。
 - 如果启用了自动刷新，会继续更新文本数据库。
+
+### 4. AI 设置建议
+
+- 推荐先配好一个 provider 和一个默认 model，再逐步增加场景覆盖模型。
+- 如果你希望不同任务用不同模型：
+  - 查词用 `Search Model`
+  - 句子翻译用 `Translate Model`
+  - 卡片自动填充用 `Card Model`
+- 如果某个场景没有单独配置模型，插件会自动回退到 `Default Model`。
+- 如果你需要更细的接口兼容控制，可以继续配置：
+  - `Capability Mode`
+  - `Reasoning`
+  - `Thinking`
+  - `Custom Parameters`
+- 完整配置说明见：[`docs/ai_settings_usage.md`](./docs/ai_settings_usage.md)
 
 ## 🛠️ 本地开发
 

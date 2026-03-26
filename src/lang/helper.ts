@@ -46,7 +46,7 @@ export function setLanguage(lang?: string | null, persist = true): UiLanguage {
 
 export function t(text: LocaleKey): string {
     const locale = localeMap[currentLanguageRef.value] || en;
-    return locale[text] || en[text];
+    return locale[text] || en[text] || text;
 }
 
 if (typeof window !== "undefined") {

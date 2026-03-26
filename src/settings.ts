@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, Modal, moment, debounce, requestUrl } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, Modal, TextComponent, debounce } from "obsidian";
 
 import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
@@ -7,9 +7,32 @@ import { t, type UiLanguage } from "./lang/helper";
 import { WarningModal, OpenFileModal } from "./modals"
 import { dicts } from "@dict/list";
 import store from "./store";
+import {
+    AISettingsV2,
+    AIProviderConfig,
+    AIModelConfig,
+    AIProviderHeader,
+    AICustomParameter,
+    AICustomParameterType,
+    AICapabilityMode,
+    AI_PROVIDER_PRESET_META,
+    createCustomProviderId,
+    createDefaultAISettings,
+    createModelConfig,
+    findAIProvider,
+    getAvailableAIModels,
+    getRecommendedModelsForProvider,
+    isBuiltinProvider,
+    normalizeAIModelConfig,
+    normalizeAIProviderConfig,
+    normalizeAISettings,
+} from "./ai/config";
+import { testModelConnection } from "@dict/ai/engine";
 
 // Import external CSS for settings panel
 import "./styles/settings.css";
+
+const tr = (key: string) => t(key as any);
 
 export type MeaningAutofillMode =
     | "off"
@@ -59,27 +82,10 @@ export interface MyPluginSettings {
     last_sync?: string;
     last_word_db_hash?: string;
     // ai
-    ai: {
-        provider: string;
-        api_key: string;
-        api_url: string;
-        model: string;
-        prompt: string;
-        context_prompt: string;
-        trans_prompt: string;
-        card_prompt: string;
-    };
+    ai: AISettingsV2;
     // ui
     activeTab: string;
 }
-
-const AI_PROVIDERS: Record<string, { label: string; url: string; models: string[] }> = {
-    openai: { label: "OpenAI", url: "https://api.openai.com/v1/chat/completions", models: ["gpt-3.5-turbo", "gpt-4", "gpt-4o", "gpt-4o-mini"] },
-    gemini: { label: "Gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", models: ["gemini-2.0-flash", "gemini-2.0-pro-exp", "gemini-3.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"] },
-    deepseek: { label: "DeepSeek", url: "https://api.deepseek.com/chat/completions", models: ["deepseek-chat", "deepseek-coder"] },
-    siliconflow: { label: "硅基流动", url: "https://api.siliconflow.cn/v1/chat/completions", models: ["Qwen/Qwen2.5-7B-Instruct", "deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-V3.1-Terminus", "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V2.5", "zai-org/GLM-4.6", "moonshotai/Kimi-K2-Thinking"] },
-    custom: { label: "Custom", url: "", models: [] }
-};
 
 export const DEFAULT_SETTINGS: MyPluginSettings = {
     use_server: false,
@@ -127,18 +133,795 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     review_delimiter: "?",  // 复习分隔符
     last_sync: "1970-01-01T00:00:00Z",
     last_word_db_hash: "",
-    ai: {
-        provider: "openai",  // OpenAI（质量最好）
-        api_key: "",  // ⚠️ 需要用户配置（或使用 OB English Learner 的密钥）
-        api_url: "https://api.openai.com/v1/chat/completions",
-        model: "gpt-4o-mini",  // 使用 GPT-4o-mini（更快、更便宜）
-        prompt: "You are a helpful English learning assistant. Explain the meaning of words clearly and provide examples.",
-        context_prompt: "You are a helpful English learning assistant. Explain the selected word or phrase in the given sentence. Focus on its meaning in this exact context, then give a concise general meaning and one short usage note. Use markdown.",
-        trans_prompt: "Translate the following sentence into Chinese accurately and naturally: {sentence}",
-        card_prompt: "You are a helpful English learning assistant. Fill a learner's vocabulary card from the selected expression and optional context. Return only valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}. Keep the meaning concise, aliases practical, tags short, and notes useful for study."
-    },
+    ai: createDefaultAISettings(),
     activeTab: "general"
 };
+
+function isRecord(value: unknown): value is Record<string, any> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeSettings(data: unknown): MyPluginSettings {
+    const source = isRecord(data) ? data : {};
+    const defaults = DEFAULT_SETTINGS;
+    const dictionaries = isRecord(source.dictionaries) ? source.dictionaries : {};
+
+    return {
+        ...defaults,
+        ...source,
+        dictionaries: {
+            ...defaults.dictionaries,
+            ...dictionaries,
+        },
+        ai: normalizeAISettings(source.ai),
+        activeTab: typeof source.activeTab === "string" ? source.activeTab : defaults.activeTab,
+    };
+}
+
+function parseProviderHeadersText(text: string): AIProviderHeader[] {
+    return text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            const separatorIndex = line.indexOf(":");
+            if (separatorIndex === -1) {
+                return null;
+            }
+
+            const key = line.slice(0, separatorIndex).trim();
+            const value = line.slice(separatorIndex + 1).trim();
+            if (!key) {
+                return null;
+            }
+
+            return { key, value } satisfies AIProviderHeader;
+        })
+        .filter((item): item is AIProviderHeader => Boolean(item));
+}
+
+function formatProviderHeadersText(headers: AIProviderHeader[]): string {
+    return headers.map((header) => `${header.key}: ${header.value}`).join("\n");
+}
+
+function parseCustomParametersText(text: string): AICustomParameter[] {
+    if (!text.trim()) {
+        return [];
+    }
+
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+        throw new Error(tr("Custom parameters must be a JSON array"));
+    }
+
+    return parsed
+        .map((item) => {
+            if (!isRecord(item) || typeof item.key !== "string" || typeof item.type !== "string") {
+                return null;
+            }
+            const type = item.type as AICustomParameterType;
+            if (!["text", "number", "boolean", "json"].includes(type)) {
+                return null;
+            }
+            return {
+                key: item.key.trim(),
+                type,
+                value: item.value,
+            } as AICustomParameter;
+        })
+        .filter((item): item is AICustomParameter => Boolean(item) && !!item.key);
+}
+
+function formatCustomParametersText(parameters: AICustomParameter[]): string {
+    return JSON.stringify(parameters, null, 2);
+}
+
+function formatOptionalNumber(value?: number): string {
+    return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+}
+
+function parseOptionalNumber(value: string): number | undefined {
+    if (!value.trim()) {
+        return undefined;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getCapabilityModeLabel(mode: AICapabilityMode): string {
+    switch (mode) {
+        case "thinking-config":
+            return "thinking_config";
+        case "siliconflow-thinking":
+            return "enable_thinking";
+        case "openai-reasoning":
+        default:
+            return "reasoning / reasoning_effort";
+    }
+}
+
+function getProviderDisplayName(provider: AIProviderConfig): string {
+    return provider.label || provider.id;
+}
+
+function getModelDisplayName(model: AIModelConfig): string {
+    return model.name || model.model;
+}
+
+function createInfoCard(containerEl: HTMLElement, text: string, variant: "info" | "warning" | "danger" = "info"): HTMLElement {
+    return containerEl.createDiv({
+        cls: ["ll-info-card", variant === "info" ? "" : variant].filter(Boolean).join(" "),
+        text,
+    });
+}
+
+function createAISection(containerEl: HTMLElement, title: string, description?: string): HTMLElement {
+    const section = containerEl.createDiv({ cls: "ll-ai-section" });
+    section.createEl("h4", { text: title, cls: "ll-ai-section-title" });
+    if (description) {
+        section.createEl("p", { text: description, cls: "ll-ai-section-description" });
+    }
+    return section;
+}
+
+function summarizeRoutingTarget(ai: AISettingsV2, modelId: string): string {
+    if (!modelId) {
+        return tr("Follow default");
+    }
+    const model = ai.models.find((item) => item.id === modelId);
+    return model ? getModelDisplayName(model) : tr("Missing model");
+}
+
+function getModelRoutingUsages(ai: AISettingsV2, model: AIModelConfig): string[] {
+    const usages: string[] = [];
+    if (ai.routing.defaultModelId === model.id) usages.push(tr("Default"));
+    if (ai.routing.searchModelId === model.id) usages.push(tr("Search"));
+    if (ai.routing.translateModelId === model.id) usages.push(tr("Translate"));
+    if (ai.routing.cardModelId === model.id) usages.push(tr("Card"));
+    return usages;
+}
+
+function getProviderModelCount(ai: AISettingsV2, providerId: string): number {
+    return ai.models.filter((model) => model.providerId === providerId).length;
+}
+
+function getProviderRoutingSummary(ai: AISettingsV2, providerId: string): string[] {
+    const routed = ai.models
+        .filter((model) => model.providerId === providerId)
+        .flatMap((model) => getModelRoutingUsages(ai, model));
+    return [...new Set(routed)];
+}
+
+function addSettingBadges(setting: Setting, badges: Array<{ label: string; tone?: "accent" | "muted" | "warning" }>) {
+    const nameEl = (setting as any).nameEl as HTMLElement | undefined;
+    if (!nameEl || badges.length === 0) {
+        return;
+    }
+
+    const badgeRow = nameEl.createDiv({ cls: "ll-setting-badges" });
+    badges.forEach((badge) => {
+        badgeRow.createSpan({
+            cls: ["ll-setting-badge", badge.tone ? `is-${badge.tone}` : ""].filter(Boolean).join(" "),
+            text: badge.label,
+        });
+    });
+}
+
+function isValidHttpUrl(value: string): boolean {
+    if (!value.trim()) {
+        return false;
+    }
+    try {
+        const url = new URL(value);
+        return url.protocol === "http:" || url.protocol === "https:";
+    } catch (_error) {
+        return false;
+    }
+}
+
+function validateHeaderLines(text: string): { valid: boolean; message: string } {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+        const separatorIndex = line.indexOf(":");
+        if (separatorIndex <= 0 || separatorIndex === line.length - 1) {
+            return {
+                valid: false,
+                message: tr("Each custom header must use the format Header-Name: value"),
+            };
+        }
+    }
+    return { valid: true, message: "" };
+}
+
+function setInputValidationState(
+    inputEl: HTMLInputElement | HTMLTextAreaElement,
+    stateEl: HTMLElement,
+    validation: { valid: boolean; message: string }
+) {
+    inputEl.toggleClass("is-invalid", !validation.valid);
+    stateEl.setText(validation.message);
+    stateEl.toggleClass("is-visible", !validation.valid);
+}
+
+function describeModelDeletionImpact(ai: AISettingsV2, model: AIModelConfig): string {
+    const usages = getModelRoutingUsages(ai, model);
+    if (usages.length === 0) {
+        return `${tr("Delete Model")}: ${getModelDisplayName(model)}?`;
+    }
+
+    const fallbackTarget = summarizeRoutingTarget(ai, ai.routing.defaultModelId);
+    const details = usages.map((usage) => {
+        if (usage === tr("Default")) {
+            return `${usage} → ${tr("Will fall back to first available enabled model")}`;
+        }
+        return `${usage} → ${tr("Will follow default")}: ${fallbackTarget}`;
+    });
+
+    return `${tr("Delete Model")}: ${getModelDisplayName(model)}? ${tr("Impact")}: ${details.join(" | ")}`;
+}
+
+function describeProviderDeletionImpact(ai: AISettingsV2, provider: AIProviderConfig): string {
+    const providerModels = ai.models.filter((model) => model.providerId === provider.id);
+    const routeImpacts = providerModels.flatMap((model) => getModelRoutingUsages(ai, model));
+    if (routeImpacts.length === 0) {
+        return `${tr("Delete Provider")}: ${getProviderDisplayName(provider)}?`;
+    }
+
+    return `${tr("Delete Provider")}: ${getProviderDisplayName(provider)}? ${tr("This will also remove routed models for")}: ${[...new Set(routeImpacts)].join(", ")}`;
+}
+
+function createEmptyCustomParameter(): AICustomParameter {
+    return {
+        key: "",
+        type: "text",
+        value: "",
+    };
+}
+
+function normalizeCustomParameterValueForType(
+    value: string | number | boolean,
+    type: AICustomParameterType
+): string | number | boolean {
+    switch (type) {
+        case "number":
+            return typeof value === "number" ? value : Number(value || 0);
+        case "boolean":
+            if (typeof value === "boolean") return value;
+            return String(value).toLowerCase() === "true";
+        case "json":
+            return typeof value === "string" ? value : JSON.stringify(value ?? {}, null, 2);
+        case "text":
+        default:
+            return typeof value === "string" ? value : String(value ?? "");
+    }
+}
+
+function validateJsonParameterValue(value: string): { valid: boolean; message: string } {
+    if (!value.trim()) {
+        return {
+            valid: false,
+            message: tr("JSON parameters cannot be empty"),
+        };
+    }
+
+    try {
+        JSON.parse(value);
+        return { valid: true, message: "" };
+    } catch (error: any) {
+        return {
+            valid: false,
+            message: `${tr("Invalid JSON")}: ${error?.message || tr("Please check the JSON syntax")}`,
+        };
+    }
+}
+
+class AIProviderModal extends Modal {
+    private draft: AIProviderConfig;
+    private readonly onSaveProvider: (provider: AIProviderConfig) => Promise<void>;
+    private readonly readonlyPreset: boolean;
+
+    constructor(app: App, provider: AIProviderConfig, onSaveProvider: (provider: AIProviderConfig) => Promise<void>) {
+        super(app);
+        this.draft = { ...provider, customHeaders: [...provider.customHeaders] };
+        this.onSaveProvider = onSaveProvider;
+        this.readonlyPreset = isBuiltinProvider(provider);
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("ll-ai-modal");
+        contentEl.createEl("h3", {
+            text: this.readonlyPreset ? tr("Edit Provider") : tr("Create / Edit Provider"),
+        });
+        createInfoCard(
+            contentEl,
+            this.readonlyPreset
+                ? tr("Built-in providers can be edited and disabled, but they cannot be deleted.")
+                : tr("Custom providers are ideal for self-hosted or third-party OpenAI-compatible endpoints.")
+        );
+
+        const baseUrlState = contentEl.createDiv({ cls: "ll-input-validation" });
+        const apiKeyState = contentEl.createDiv({ cls: "ll-input-validation" });
+        const headersState = contentEl.createDiv({ cls: "ll-input-validation" });
+
+        new Setting(contentEl)
+            .setName(tr("Provider preset"))
+            .setDesc(this.draft.preset)
+            .setDisabled(true);
+
+        new Setting(contentEl)
+            .setName(tr("Label"))
+            .addText((text) => text
+                .setValue(this.draft.label)
+                .onChange((value) => {
+                    this.draft.label = value.trim() || this.draft.label;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Enabled"))
+            .addToggle((toggle) => toggle
+                .setValue(this.draft.enabled)
+                .onChange((value) => {
+                    this.draft.enabled = value;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Base URL"))
+            .addText((text) => {
+                text.setPlaceholder("https://.../chat/completions")
+                    .setValue(this.draft.baseUrl)
+                    .onChange((value) => {
+                        this.draft.baseUrl = value.trim();
+                        setInputValidationState(text.inputEl, baseUrlState, {
+                            valid: isValidHttpUrl(this.draft.baseUrl),
+                            message: isValidHttpUrl(this.draft.baseUrl) ? "" : tr("Enter a valid http(s) chat completions URL"),
+                        });
+                    });
+                text.inputEl.style.width = "100%";
+                setInputValidationState(text.inputEl, baseUrlState, {
+                    valid: isValidHttpUrl(this.draft.baseUrl),
+                    message: isValidHttpUrl(this.draft.baseUrl) ? "" : tr("Enter a valid http(s) chat completions URL"),
+                });
+            });
+
+        new Setting(contentEl)
+            .setName(t("API Key"))
+            .addText((text) => {
+                text.setValue(this.draft.apiKey).onChange((value) => {
+                    this.draft.apiKey = value.trim();
+                    const valid = !!this.draft.apiKey;
+                    setInputValidationState(text.inputEl, apiKeyState, {
+                        valid,
+                        message: valid ? "" : tr("API Key is required for connection tests and live AI requests"),
+                    });
+                });
+                text.inputEl.type = "password";
+                text.inputEl.style.width = "100%";
+                const valid = !!this.draft.apiKey;
+                setInputValidationState(text.inputEl, apiKeyState, {
+                    valid,
+                    message: valid ? "" : tr("API Key is required for connection tests and live AI requests"),
+                });
+            });
+
+        new Setting(contentEl)
+            .setName(tr("Capability Mode"))
+            .setDesc(tr("Controls how thinking / reasoning fields are mapped into the request body"))
+            .addDropdown((dropdown) => dropdown
+                .addOption("openai-reasoning", `OpenAI-compatible (${getCapabilityModeLabel("openai-reasoning")})`)
+                .addOption("thinking-config", `Compatible (${getCapabilityModeLabel("thinking-config")})`)
+                .addOption("siliconflow-thinking", `SiliconFlow (${getCapabilityModeLabel("siliconflow-thinking")})`)
+                .setValue(this.draft.capabilityMode)
+                .onChange((value: AICapabilityMode) => {
+                    this.draft.capabilityMode = value;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Custom Headers"))
+            .setDesc(tr("One header per line, in the format Header-Name: value"))
+            .addTextArea((text) => {
+                text.setPlaceholder("HTTP-Referer: https://example.com")
+                    .setValue(formatProviderHeadersText(this.draft.customHeaders))
+                    .onChange((value) => {
+                        const validation = validateHeaderLines(value);
+                        setInputValidationState(text.inputEl, headersState, validation);
+                        if (validation.valid) {
+                            this.draft.customHeaders = parseProviderHeadersText(value);
+                        }
+                    });
+                text.inputEl.rows = 6;
+                text.inputEl.style.width = "100%";
+                setInputValidationState(text.inputEl, headersState, validateHeaderLines(formatProviderHeadersText(this.draft.customHeaders)));
+            });
+
+        new Setting(contentEl)
+            .addButton((button) => button
+                .setButtonText(tr("Save"))
+                .setCta()
+                .onClick(async () => {
+                    const baseUrlValid = isValidHttpUrl(this.draft.baseUrl);
+                    const headersValidation = validateHeaderLines(formatProviderHeadersText(this.draft.customHeaders));
+                    if (!baseUrlValid || !headersValidation.valid) {
+                        new Notice(tr("Please fix the provider validation errors before saving"));
+                        return;
+                    }
+                    this.draft = normalizeAIProviderConfig(this.draft);
+                    await this.onSaveProvider(this.draft);
+                    this.close();
+                }))
+            .addButton((button) => button
+                .setButtonText(tr("Cancel"))
+                .onClick(() => this.close()));
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class AIModelModal extends Modal {
+    private draft: AIModelConfig;
+    private readonly providers: AIProviderConfig[];
+    private readonly buildPreviewAiSettings: (draft: AIModelConfig) => AISettingsV2;
+    private readonly onSaveModel: (model: AIModelConfig) => Promise<void>;
+    private modelInput?: TextComponent;
+
+    private renderCustomParametersEditor(containerEl: HTMLElement) {
+        const section = containerEl.createDiv({ cls: "ll-custom-params-editor" });
+        const header = section.createDiv({ cls: "ll-custom-params-header" });
+        header.createEl("div", { text: tr("Custom Parameters"), cls: "ll-custom-params-title" });
+        header.createEl("div", {
+            text: tr("Add request body fields without writing raw JSON. Reserved fields are still protected."),
+            cls: "ll-custom-params-description",
+        });
+
+        const listEl = section.createDiv({ cls: "ll-custom-params-list" });
+
+        const renderRows = () => {
+            listEl.empty();
+
+            if (this.draft.customParameters.length === 0) {
+                listEl.createDiv({
+                    cls: "ll-custom-params-empty",
+                    text: tr("No custom parameters yet. Add one if your provider requires extra request fields."),
+                });
+                return;
+            }
+
+            this.draft.customParameters.forEach((parameter, index) => {
+                const row = listEl.createDiv({ cls: "ll-custom-param-row" });
+
+                const keySetting = new Setting(row)
+                    .setName(tr("Key"))
+                    .setDesc(tr("Request body field name"));
+                keySetting.addText((text) => text
+                    .setPlaceholder("foo")
+                    .setValue(parameter.key)
+                    .onChange((value) => {
+                        this.draft.customParameters[index].key = value.trim();
+                    }));
+
+                const typeSetting = new Setting(row)
+                    .setName(tr("Type"))
+                    .setDesc(tr("Controls how the value is serialized"));
+                typeSetting.addDropdown((dropdown) => dropdown
+                    .addOption("text", tr("Text"))
+                    .addOption("number", tr("Number"))
+                    .addOption("boolean", tr("Boolean"))
+                    .addOption("json", tr("JSON"))
+                    .setValue(parameter.type)
+                    .onChange((value: AICustomParameterType) => {
+                        const current = this.draft.customParameters[index];
+                        current.type = value;
+                        current.value = normalizeCustomParameterValueForType(current.value, value);
+                        renderRows();
+                    }));
+
+                if (parameter.type === "boolean") {
+                    const valueSetting = new Setting(row)
+                        .setName(tr("Value"))
+                        .setDesc(tr("Boolean value"));
+                    valueSetting.addToggle((toggle) => toggle
+                        .setValue(Boolean(parameter.value))
+                        .onChange((value) => {
+                            this.draft.customParameters[index].value = value;
+                        }));
+                } else {
+                    const valueSetting = new Setting(row)
+                        .setName(tr("Value"))
+                        .setDesc(parameter.type === "json" ? tr("JSON object or array text") : tr("Parameter value"));
+                    valueSetting.addTextArea((text) => {
+                        const validationState = row.createDiv({ cls: "ll-input-validation" });
+                        const currentValue = parameter.type === "json"
+                            ? String(parameter.value ?? "")
+                            : String(parameter.value ?? "");
+                        text.setValue(currentValue).onChange((value) => {
+                            if (parameter.type === "number") {
+                                this.draft.customParameters[index].value = Number(value || 0);
+                            } else {
+                                this.draft.customParameters[index].value = value;
+                            }
+
+                            if (parameter.type === "json") {
+                                setInputValidationState(
+                                    text.inputEl,
+                                    validationState,
+                                    validateJsonParameterValue(String(this.draft.customParameters[index].value ?? ""))
+                                );
+                            } else {
+                                setInputValidationState(text.inputEl, validationState, { valid: true, message: "" });
+                            }
+                        });
+                        text.inputEl.rows = parameter.type === "json" ? 4 : 2;
+                        text.inputEl.style.width = "100%";
+                        if (parameter.type === "json") {
+                            setInputValidationState(text.inputEl, validationState, validateJsonParameterValue(currentValue));
+                        }
+                    });
+                }
+
+                const actions = row.createDiv({ cls: "ll-custom-param-actions" });
+                const removeButton = new Setting(actions);
+                removeButton.addButton((button) => button
+                    .setWarning()
+                    .setButtonText(tr("Remove"))
+                    .onClick(() => {
+                        this.draft.customParameters.splice(index, 1);
+                        renderRows();
+                    }));
+            });
+        };
+
+        new Setting(section)
+            .setName(tr("Add Parameter"))
+            .setDesc(tr("Create a new custom parameter entry"))
+            .addButton((button) => button
+                .setButtonText(tr("Add"))
+                .onClick(() => {
+                    this.draft.customParameters.push(createEmptyCustomParameter());
+                    renderRows();
+                }));
+
+        renderRows();
+    }
+
+    private validateCustomParameters(): { valid: boolean; message: string } {
+        for (const parameter of this.draft.customParameters) {
+            if (parameter.type !== "json") {
+                continue;
+            }
+
+            const validation = validateJsonParameterValue(String(parameter.value ?? ""));
+            if (!validation.valid) {
+                return {
+                    valid: false,
+                    message: `${tr("Custom Parameters")}: ${parameter.key || tr("Unnamed parameter")} — ${validation.message}`,
+                };
+            }
+        }
+
+        return { valid: true, message: "" };
+    }
+
+    constructor(
+        app: App,
+        model: AIModelConfig,
+        providers: AIProviderConfig[],
+        buildPreviewAiSettings: (draft: AIModelConfig) => AISettingsV2,
+        onSaveModel: (model: AIModelConfig) => Promise<void>
+    ) {
+        super(app);
+        this.draft = {
+            ...model,
+            reasoning: { ...model.reasoning },
+            thinking: { ...model.thinking },
+            customParameters: [...model.customParameters],
+        };
+        this.providers = providers;
+        this.buildPreviewAiSettings = buildPreviewAiSettings;
+        this.onSaveModel = onSaveModel;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("ll-ai-modal");
+        contentEl.createEl("h3", { text: tr("Edit Model") });
+        createInfoCard(
+            contentEl,
+            tr("Models can override sampling, reasoning, thinking, and custom body parameters per scenario.")
+        );
+        const selectedProvider = this.providers.find((provider) => provider.id === this.draft.providerId);
+        if (selectedProvider && !selectedProvider.enabled) {
+            createInfoCard(
+                contentEl,
+                tr("This model belongs to a disabled provider. It will not be routable until that provider is enabled."),
+                "warning"
+            );
+        }
+
+        new Setting(contentEl)
+            .setName(tr("Provider"))
+            .addDropdown((dropdown) => {
+                this.providers.forEach((provider) => {
+                    dropdown.addOption(provider.id, getProviderDisplayName(provider));
+                });
+                dropdown.setValue(this.draft.providerId).onChange((value) => {
+                    this.draft.providerId = value;
+                    const provider = this.providers.find((item) => item.id === value);
+                    const recommended = provider ? getRecommendedModelsForProvider(provider) : [];
+                    if (!this.draft.model && recommended[0]) {
+                        this.draft.model = recommended[0];
+                        this.modelInput?.setValue(this.draft.model);
+                    }
+                });
+            });
+
+        new Setting(contentEl)
+            .setName(tr("Recommended model"))
+            .setDesc(tr("Choose a preset model to quickly fill the model name, or keep your custom value"))
+            .addDropdown((dropdown) => {
+                const provider = this.providers.find((item) => item.id === this.draft.providerId);
+                dropdown.addOption("", tr("Keep current"));
+                (provider ? getRecommendedModelsForProvider(provider) : []).forEach((modelName) => {
+                    dropdown.addOption(modelName, modelName);
+                });
+                dropdown.setValue("").onChange((value) => {
+                    if (!value) return;
+                    this.draft.model = value;
+                    if (!this.draft.name) {
+                        this.draft.name = value;
+                    }
+                    this.modelInput?.setValue(value);
+                });
+            });
+
+        new Setting(contentEl)
+            .setName(t("Model Name"))
+            .addText((text) => {
+                this.modelInput = text;
+                text.setPlaceholder("gpt-4o-mini")
+                    .setValue(this.draft.model)
+                    .onChange((value) => {
+                        this.draft.model = value.trim();
+                    });
+                text.inputEl.style.width = "100%";
+            });
+
+        new Setting(contentEl)
+            .setName(tr("Display Name"))
+            .addText((text) => text
+                .setValue(this.draft.name)
+                .onChange((value) => {
+                    this.draft.name = value.trim();
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Enabled"))
+            .addToggle((toggle) => toggle
+                .setValue(this.draft.enabled)
+                .onChange((value) => {
+                    this.draft.enabled = value;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Temperature"))
+            .addText((text) => text
+                .setPlaceholder("0.3")
+                .setValue(formatOptionalNumber(this.draft.temperature))
+                .onChange((value) => {
+                    this.draft.temperature = parseOptionalNumber(value);
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Top P"))
+            .addText((text) => text
+                .setPlaceholder("1")
+                .setValue(formatOptionalNumber(this.draft.topP))
+                .onChange((value) => {
+                    this.draft.topP = parseOptionalNumber(value);
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Max Output Tokens"))
+            .addText((text) => text
+                .setPlaceholder("200")
+                .setValue(formatOptionalNumber(this.draft.maxOutputTokens))
+                .onChange((value) => {
+                    this.draft.maxOutputTokens = parseOptionalNumber(value);
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Reasoning"))
+            .setDesc(tr("Enable reasoning effort fields for compatible providers"))
+            .addToggle((toggle) => toggle
+                .setValue(this.draft.reasoning.enabled)
+                .onChange((value) => {
+                    this.draft.reasoning.enabled = value;
+                }))
+            .addDropdown((dropdown) => dropdown
+                .addOption("low", tr("Low"))
+                .addOption("medium", tr("Medium"))
+                .addOption("high", tr("High"))
+                .setValue(this.draft.reasoning.reasoningEffort)
+                .onChange((value: "low" | "medium" | "high") => {
+                    this.draft.reasoning.reasoningEffort = value;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Thinking"))
+            .setDesc(tr("Enable provider-specific thinking fields"))
+            .addToggle((toggle) => toggle
+                .setValue(this.draft.thinking.enabled)
+                .onChange((value) => {
+                    this.draft.thinking.enabled = value;
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Thinking budget tokens"))
+            .addText((text) => text
+                .setPlaceholder("Optional")
+                .setValue(formatOptionalNumber(this.draft.thinking.budgetTokens))
+                .onChange((value) => {
+                    this.draft.thinking.budgetTokens = parseOptionalNumber(value);
+                }));
+
+        new Setting(contentEl)
+            .setName(tr("Thinking budget"))
+            .addText((text) => text
+                .setPlaceholder("Optional")
+                .setValue(formatOptionalNumber(this.draft.thinking.thinkingBudget))
+                .onChange((value) => {
+                    this.draft.thinking.thinkingBudget = parseOptionalNumber(value);
+                }));
+
+        this.renderCustomParametersEditor(contentEl);
+
+        new Setting(contentEl)
+            .setName(t("Test Connection"))
+            .setDesc(tr("Test the current provider + model with a minimal request"))
+            .addButton((button) => button
+                .setButtonText(t("Test"))
+                .onClick(async () => {
+                    button.setButtonText(t("Testing..."));
+                    button.setDisabled(true);
+                    try {
+                        const normalizedDraft = normalizeAIModelConfig(this.draft);
+                        const previewSettings = this.buildPreviewAiSettings(normalizedDraft);
+                        await testModelConnection({ ai: previewSettings }, normalizedDraft.id);
+                        new Notice(t("Connection successful!"));
+                    } catch (error: any) {
+                        new Notice(error?.message || t("Connection failed"));
+                    } finally {
+                        button.setButtonText(t("Test"));
+                        button.setDisabled(false);
+                    }
+                }));
+
+        new Setting(contentEl)
+            .addButton((button) => button
+                .setButtonText(tr("Save"))
+                .setCta()
+                .onClick(async () => {
+                    const customParameterValidation = this.validateCustomParameters();
+                    if (!customParameterValidation.valid) {
+                        new Notice(customParameterValidation.message);
+                        return;
+                    }
+                    this.draft = normalizeAIModelConfig(this.draft);
+                    await this.onSaveModel(this.draft);
+                    this.close();
+                }))
+            .addButton((button) => button
+                .setButtonText(tr("Cancel"))
+                .onClick(() => this.close()));
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
 
 export class SettingTab extends PluginSettingTab {
     plugin: LanguageLearner;
@@ -263,207 +1046,352 @@ export class SettingTab extends PluginSettingTab {
     aiSettings(containerEl: HTMLElement) {
         containerEl.createEl("h3", { text: t("AI Settings") });
 
-        new Setting(containerEl)
-            .setName(t("AI Provider"))
-            .setDesc(t("Select AI provider"))
-            .addDropdown(dropdown => {
-                Object.keys(AI_PROVIDERS).forEach(key => {
-                    dropdown.addOption(key, AI_PROVIDERS[key as keyof typeof AI_PROVIDERS].label);
-                });
-                dropdown.setValue(this.plugin.settings.ai.provider)
-                    .onChange(async (value) => {
-                        this.plugin.settings.ai.provider = value;
-                        const provider = AI_PROVIDERS[value as keyof typeof AI_PROVIDERS];
-                        if (value !== 'custom') {
-                            this.plugin.settings.ai.api_url = provider.url;
-                            if (provider.models.length > 0) {
-                                this.plugin.settings.ai.model = provider.models[0];
-                            }
-                        }
-                        await this.plugin.saveSettings();
-                        this.display();
-                    });
-            });
+        const ai = this.plugin.settings.ai;
+        const availableModels = getAvailableAIModels(ai);
 
-        new Setting(containerEl)
-            .setName(t("API URL"))
-            .setDesc(t("API endpoint URL"))
-            .addText(text => text
-                .setValue(this.plugin.settings.ai.api_url)
-                .onChange(async (value) => {
-                    this.plugin.settings.ai.api_url = value;
-                    await this.plugin.saveSettings();
-                })
+        const refresh = async () => {
+            this.plugin.settings.ai = normalizeAISettings(this.plugin.settings.ai);
+            await this.plugin.saveSettings();
+            this.display();
+        };
+
+        createInfoCard(
+            containerEl,
+            [
+                `${tr("Providers")}: ${ai.providers.length}`,
+                `${tr("Models")}: ${ai.models.length}`,
+                `${tr("Available models")}: ${availableModels.length}`,
+                `${tr("Default Model")}: ${summarizeRoutingTarget(ai, ai.routing.defaultModelId)}`,
+            ].join("  •  ")
+        );
+
+        if (availableModels.length === 0) {
+            createInfoCard(
+                containerEl,
+                tr("No enabled model is currently routable. Enable at least one provider and one model before using AI features."),
+                "warning"
             );
-
-        new Setting(containerEl)
-            .setName(t("API Key"))
-            .setDesc(t("Enter your API key (supports OpenAI, Gemini, and DeepSeek formats)"))
-            .addText(text => {
-                text.setPlaceholder("sk-... / AIza...")
-                    .setValue(this.plugin.settings.ai.api_key)
-                    .onChange(async (value) => {
-                        // API Key 格式校验提示
-                        const inputEl = text.inputEl;
-                        const trimmed = value.trim();
-                        if (trimmed && !trimmed.startsWith("sk-") && !trimmed.startsWith("AIza") && trimmed.length < 20) {
-                            inputEl.style.borderColor = "var(--text-error)";
-                            inputEl.title = t("API key format may be invalid");
-                        } else {
-                            inputEl.style.borderColor = "var(--background-modifier-border)";
-                            inputEl.title = "";
-                        }
-                        this.plugin.settings.ai.api_key = trimmed;
-                        await this.plugin.saveSettings();
-                    });
-                // 密码模式隐藏 API Key
-                text.inputEl.type = "password";
-                text.inputEl.style.width = "300px";
-            });
-
-        // Add dropdown for model selection if provider has models
-        const currentProvider = AI_PROVIDERS[this.plugin.settings.ai.provider as keyof typeof AI_PROVIDERS];
-        if (currentProvider && currentProvider.models.length > 0) {
-            new Setting(containerEl)
-                .setName(t("Select Model"))
-                .setDesc(t("Choose from available models"))
-                .addDropdown(dropdown => {
-                    currentProvider.models.forEach(model => {
-                        dropdown.addOption(model, model);
-                    });
-                    // Handle case where current model is not in the list
-                    if (!currentProvider.models.includes(this.plugin.settings.ai.model)) {
-                        // If current model is valid but not in list, maybe add it or reset?
-                        // For now let's just keep it if possible, but dropdown usually requires value to be in options
-                        // If we want to support custom models in dropdown, we need an editable combo box which Setting doesn't support natively easily.
-                        // So we default to first model if invalid, or just let it be.
-                        // If user switched provider, model was reset in onChange above.
-                    }
-
-                    dropdown.setValue(this.plugin.settings.ai.model)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ai.model = value;
-                            await this.plugin.saveSettings();
-                        });
-                });
-        } else {
-            new Setting(containerEl)
-                .setName(t("Model Name"))
-                .setDesc(t("Enter the model name"))
-                .addText(text => text
-                    .setValue(this.plugin.settings.ai.model)
-                    .onChange(async (value) => {
-                        this.plugin.settings.ai.model = value;
-                        await this.plugin.saveSettings();
-                    })
-                );
         }
 
-        new Setting(containerEl)
-            .setName(t("System Prompt"))
-            .setDesc(t("Prompt for dictionary definition"))
-            .addTextArea(text => text
-                .setValue(this.plugin.settings.ai.prompt)
-                .onChange(async (value) => {
-                    this.plugin.settings.ai.prompt = value;
-                    await this.plugin.saveSettings();
-                })
-            );
+        const providersSection = createAISection(
+            containerEl,
+            tr("Providers"),
+            tr("Manage API endpoints, credentials, headers, and provider-specific capability mapping.")
+        );
 
-        new Setting(containerEl)
-            .setName(t("Translation Prompt"))
-            .setDesc(t("Prompt for sentence translation. Use {sentence} as the placeholder."))
-            .addTextArea(text => text
-                .setValue(this.plugin.settings.ai.trans_prompt)
-                .onChange(async (value) => {
-                    this.plugin.settings.ai.trans_prompt = value;
-                    await this.plugin.saveSettings();
-                })
-            );
-
-        new Setting(containerEl)
-            .setName(t("Context Prompt"))
-            .setDesc(t("Prompt for contextual explanation when sentence context is available."))
-            .addTextArea(text => text
-                .setValue(this.plugin.settings.ai.context_prompt)
-                .onChange(async (value) => {
-                    this.plugin.settings.ai.context_prompt = value;
-                    await this.plugin.saveSettings();
-                })
-            );
-
-        new Setting(containerEl)
-            .setName(t("Test Connection"))
-            .setDesc(t("Test whether the current API configuration works"))
-            .addButton(button => button
-                .setButtonText(t("Test"))
-                .onClick(async () => {
-                    button.setButtonText(t("Testing..."));
-                    button.setDisabled(true);
-                    try {
-                        const { api_url, api_key, model, provider } = this.plugin.settings.ai;
-
-                        if (!api_key) {
-                            new Notice(t("Please enter API key first"));
-                            return;
-                        }
-
-                        // Construct request based on provider
-                        let url = api_url;
-                        let headers: Record<string, string> = {
-                            "Content-Type": "application/json",
-                            "Authorization": `Bearer ${api_key}`
-                        };
-                        let body: any = {
-                            model: model,
-                            messages: [{ role: "user", content: "Hi" }],
-                            max_tokens: 5
-                        };
-
-                        // Special handling for Gemini
-                        if (provider === 'gemini') {
-                            // Gemini uses query param for key if using Google's endpoint, 
-                            // but here we are using OpenAI compatible endpoint?
-                            // The settings default for Gemini is: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
-                            // This endpoint requires key in header or query param? 
-                            // Usually OpenAI compatible endpoints use Authorization header.
-                            // Let's assume standard OpenAI format as per previous implementation.
-                        }
-
-                        const response = await requestUrl({
-                            url: url,
-                            method: "POST",
-                            headers: headers,
-                            body: JSON.stringify(body)
-                        });
-
-                        if (response.status === 200) {
-                            new Notice(t("Connection successful!"));
-                        } else {
-                            new Notice(`${t("Connection failed")}: ${response.status}`);
-                        }
-                    } catch (error: any) {
-                        console.error(error);
-                        let msg = t("Connection failed");
-                        if (error.status) {
-                            switch (error.status) {
-                                case 401: msg = t("Invalid API key (401)"); break;
-                                case 403: msg = t("Permission denied (403)"); break;
-                                case 404: msg = t("Invalid API URL (404)"); break;
-                                case 429: msg = t("Rate limit exceeded (429)"); break;
-                                case 500: msg = t("Server error (500)"); break;
-                                case 503: msg = t("Service unavailable (503)"); break;
+        ai.providers.forEach((provider) => {
+            const presetMeta = provider.preset !== "custom" ? AI_PROVIDER_PRESET_META[provider.preset] : null;
+            const providerModelCount = getProviderModelCount(ai, provider.id);
+            const providerRoutingUsage = getProviderRoutingSummary(ai, provider.id);
+            const setting = new Setting(providersSection)
+                .setName(getProviderDisplayName(provider))
+                .setDesc([
+                    provider.enabled ? tr("Enabled") : tr("Disabled"),
+                    provider.baseUrl || tr("No Base URL"),
+                    presetMeta ? `Preset: ${presetMeta.label}` : tr("Custom provider"),
+                    `${tr("Models")}: ${providerModelCount}`,
+                    providerRoutingUsage.length ? `${tr("Routes")}: ${providerRoutingUsage.join("/")}` : "",
+                    `Capability: ${getCapabilityModeLabel(provider.capabilityMode)}`,
+                ].filter(Boolean).join(" • "))
+                .addToggle((toggle) => toggle
+                    .setValue(provider.enabled)
+                    .onChange(async (value) => {
+                        provider.enabled = value;
+                        await refresh();
+                    }))
+                .addButton((button) => button
+                    .setButtonText(tr("Edit"))
+                    .onClick(() => {
+                        new AIProviderModal(this.app, provider, async (nextProvider) => {
+                            const index = this.plugin.settings.ai.providers.findIndex((item) => item.id === provider.id);
+                            if (index >= 0) {
+                                this.plugin.settings.ai.providers[index] = nextProvider;
                             }
-                        } else if (error.message) {
-                            msg += `: ${error.message}`;
+                            await refresh();
+                        }).open();
+                    }));
+            addSettingBadges(setting, [
+                ...(provider.enabled ? [{ label: tr("Enabled"), tone: "accent" as const }] : [{ label: tr("Disabled"), tone: "muted" as const }]),
+                ...(providerRoutingUsage.length ? providerRoutingUsage.map((usage) => ({ label: usage, tone: "warning" as const })) : []),
+            ]);
+            if (providerRoutingUsage.length || ai.routing.defaultModelId && ai.models.some((model) => model.providerId === provider.id && ai.routing.defaultModelId === model.id)) {
+                setting.settingEl.addClass("ll-setting-highlight");
+            }
+            if (!isBuiltinProvider(provider)) {
+                setting.addExtraButton((button) => button
+                    .setIcon("trash")
+                    .setTooltip(tr("Delete"))
+                    .onClick(async () => {
+                        new WarningModal(
+                            this.app,
+                            describeProviderDeletionImpact(this.plugin.settings.ai, provider),
+                            async () => {
+                                this.plugin.settings.ai.providers = this.plugin.settings.ai.providers.filter((item) => item.id !== provider.id);
+                                this.plugin.settings.ai.models = this.plugin.settings.ai.models.filter((model) => model.providerId !== provider.id);
+                                await refresh();
+                            }
+                        ).open();
+                    }));
+            }
+        });
+
+        new Setting(providersSection)
+            .setName(tr("Add Custom Provider"))
+            .setDesc(tr("Create an additional OpenAI-compatible provider entry"))
+            .addButton((button) => button
+                .setButtonText(tr("Add"))
+                .onClick(() => {
+                    const provider = normalizeAIProviderConfig({
+                        id: createCustomProviderId(this.plugin.settings.ai.providers.map((item) => item.id)),
+                        preset: "custom",
+                        label: "Custom",
+                        enabled: true,
+                        baseUrl: "",
+                        apiKey: "",
+                        customHeaders: [],
+                        capabilityMode: "openai-reasoning",
+                    });
+                    new AIProviderModal(this.app, provider, async (nextProvider) => {
+                        this.plugin.settings.ai.providers.push(nextProvider);
+                        await refresh();
+                    }).open();
+                }));
+
+        const modelsSection = createAISection(
+            containerEl,
+            tr("Models"),
+            tr("Each model binds to a provider and can override temperature, top-p, token limits, thinking, reasoning, and custom parameters.")
+        );
+        ai.models.forEach((model) => {
+            const provider = findAIProvider(ai, model.providerId);
+            const routingUsages = getModelRoutingUsages(ai, model);
+            const setting = new Setting(modelsSection)
+                .setName(getModelDisplayName(model))
+                .setDesc([
+                    provider ? getProviderDisplayName(provider) : tr("Unknown provider"),
+                    model.model,
+                    model.enabled ? tr("Enabled") : tr("Disabled"),
+                    routingUsages.length ? `${tr("In use")}: ${routingUsages.join("/")}` : tr("Not routed"),
+                ].join(" • "))
+                .addToggle((toggle) => toggle
+                    .setValue(model.enabled)
+                    .onChange(async (value) => {
+                        model.enabled = value;
+                        await refresh();
+                    }))
+                .addButton((button) => button
+                    .setButtonText(tr("Edit"))
+                    .onClick(() => {
+                        new AIModelModal(
+                            this.app,
+                            model,
+                            this.plugin.settings.ai.providers,
+                            (draft) => {
+                                const nextAi = normalizeAISettings({
+                                    ...this.plugin.settings.ai,
+                                    models: this.plugin.settings.ai.models.map((item) => item.id === model.id ? draft : item),
+                                });
+                                return nextAi;
+                            },
+                            async (nextModel) => {
+                                const index = this.plugin.settings.ai.models.findIndex((item) => item.id === model.id);
+                                if (index >= 0) {
+                                    this.plugin.settings.ai.models[index] = nextModel;
+                                }
+                                await refresh();
+                            }
+                        ).open();
+                    }))
+                .addExtraButton((button) => button
+                    .setIcon("trash")
+                    .setTooltip(tr("Delete"))
+                    .onClick(async () => {
+                        new WarningModal(
+                            this.app,
+                            describeModelDeletionImpact(this.plugin.settings.ai, model),
+                            async () => {
+                                this.plugin.settings.ai.models = this.plugin.settings.ai.models.filter((item) => item.id !== model.id);
+                                await refresh();
+                            }
+                        ).open();
+                    }));
+            addSettingBadges(setting, [
+                ...(routingUsages.length
+                    ? routingUsages.map((usage) => ({ label: usage, tone: usage === tr("Default") ? "accent" as const : "warning" as const }))
+                    : [{ label: tr("Unused"), tone: "muted" as const }]),
+                ...(model.enabled ? [] : [{ label: tr("Disabled"), tone: "muted" as const }]),
+            ]);
+            if (routingUsages.length) {
+                setting.settingEl.addClass("ll-setting-highlight");
+            }
+        });
+
+        new Setting(modelsSection)
+            .setName(tr("Add Model"))
+            .setDesc(tr("Add a model bound to one of the configured providers"))
+            .addButton((button) => button
+                .setButtonText(tr("Add"))
+                .onClick(() => {
+                    const defaultProviderId = this.plugin.settings.ai.providers[0]?.id || "openai";
+                    const provider = findAIProvider(this.plugin.settings.ai, defaultProviderId);
+                    const recommendedModel = provider ? getRecommendedModelsForProvider(provider)[0] : "gpt-4o-mini";
+                    const nextModel = createModelConfig(
+                        defaultProviderId,
+                        recommendedModel || "gpt-4o-mini",
+                        {},
+                        this.plugin.settings.ai.models.map((item) => item.id)
+                    );
+                    nextModel.id = "";
+
+                    new AIModelModal(
+                        this.app,
+                        nextModel,
+                        this.plugin.settings.ai.providers,
+                        (draft) => normalizeAISettings({
+                            ...this.plugin.settings.ai,
+                            models: [...this.plugin.settings.ai.models, draft],
+                        }),
+                        async (draft) => {
+                            const normalized = normalizeAIModelConfig(
+                                draft,
+                                this.plugin.settings.ai.models.map((item) => item.id)
+                            );
+                            this.plugin.settings.ai.models.push(normalized);
+                            await refresh();
                         }
-                        new Notice(msg);
-                    } finally {
-                        button.setButtonText(t("Test"));
-                        button.setDisabled(false);
-                    }
-                })
-            );
+                    ).open();
+                }));
+
+        const routingSection = createAISection(
+            containerEl,
+            tr("Routing"),
+            tr("Choose one global default model and optional overrides for search, translation, and card autofill.")
+        );
+        const addModelOptions = (
+            dropdown: import("obsidian").DropdownComponent,
+            includeFollowDefault = false
+        ) => {
+            if (includeFollowDefault) {
+                dropdown.addOption("", tr("Follow default"));
+            }
+            availableModels.forEach((model) => {
+                const provider = findAIProvider(this.plugin.settings.ai, model.providerId);
+                dropdown.addOption(model.id, `${getModelDisplayName(model)} (${provider ? getProviderDisplayName(provider) : model.providerId})`);
+            });
+        };
+
+        createInfoCard(
+            routingSection,
+            [
+                `${tr("Search Model")}: ${summarizeRoutingTarget(ai, ai.routing.searchModelId)}`,
+                `${tr("Translate Model")}: ${summarizeRoutingTarget(ai, ai.routing.translateModelId)}`,
+                `${tr("Card Model")}: ${summarizeRoutingTarget(ai, ai.routing.cardModelId)}`,
+            ].join("  •  ")
+        );
+
+        new Setting(routingSection)
+            .setName(tr("Default Model"))
+            .setDesc(tr("Fallback model used when a scene-specific override is not available"))
+            .addDropdown((dropdown) => {
+                addModelOptions(dropdown);
+                dropdown.setValue(this.plugin.settings.ai.routing.defaultModelId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ai.routing.defaultModelId = value;
+                        await refresh();
+                    });
+            });
+
+        new Setting(routingSection)
+            .setName(tr("Search Model"))
+            .setDesc(`${tr("Current")}: ${summarizeRoutingTarget(ai, ai.routing.searchModelId)}`)
+            .addDropdown((dropdown) => {
+                addModelOptions(dropdown, true);
+                dropdown.setValue(this.plugin.settings.ai.routing.searchModelId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ai.routing.searchModelId = value;
+                        await refresh();
+                    });
+            });
+
+        new Setting(routingSection)
+            .setName(tr("Translate Model"))
+            .setDesc(`${tr("Current")}: ${summarizeRoutingTarget(ai, ai.routing.translateModelId)}`)
+            .addDropdown((dropdown) => {
+                addModelOptions(dropdown, true);
+                dropdown.setValue(this.plugin.settings.ai.routing.translateModelId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ai.routing.translateModelId = value;
+                        await refresh();
+                    });
+            });
+
+        new Setting(routingSection)
+            .setName(tr("Card Model"))
+            .setDesc(`${tr("Current")}: ${summarizeRoutingTarget(ai, ai.routing.cardModelId)}`)
+            .addDropdown((dropdown) => {
+                addModelOptions(dropdown, true);
+                dropdown.setValue(this.plugin.settings.ai.routing.cardModelId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ai.routing.cardModelId = value;
+                        await refresh();
+                    });
+            });
+
+        const promptsSection = createAISection(
+            containerEl,
+            tr("Prompts"),
+            tr("Prompts stay scene-based, not per-model. Keep {sentence} in the translation prompt if you want sentence substitution.")
+        );
+        new Setting(promptsSection)
+            .setName(tr("Search Prompt"))
+            .setDesc(tr("Prompt used for normal AI dictionary lookups"))
+            .addTextArea((text) => text
+                .setValue(this.plugin.settings.ai.prompts.search)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.prompts.search = value;
+                    await refresh();
+                }));
+
+        new Setting(promptsSection)
+            .setName(tr("Context Search Prompt"))
+            .setDesc(tr("Prompt used when sentence context is available"))
+            .addTextArea((text) => text
+                .setValue(this.plugin.settings.ai.prompts.contextSearch)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.prompts.contextSearch = value;
+                    await refresh();
+                }));
+
+        new Setting(promptsSection)
+            .setName(t("Translation Prompt"))
+            .setDesc(tr("Use {sentence} as the placeholder"))
+            .addTextArea((text) => text
+                .setValue(this.plugin.settings.ai.prompts.translate)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.prompts.translate = value;
+                    await refresh();
+                }));
+
+        new Setting(promptsSection)
+            .setName(tr("Card Prompt"))
+            .setDesc(tr("Prompt used for AI card autofill JSON output"))
+            .addTextArea((text) => text
+                .setValue(this.plugin.settings.ai.prompts.card)
+                .onChange(async (value) => {
+                    this.plugin.settings.ai.prompts.card = value;
+                    await refresh();
+                }));
+
+        const connectionSection = createAISection(
+            containerEl,
+            tr("Connection Test"),
+            tr("Connection tests are run from each model editor so the selected provider and model are always tested together.")
+        );
+        createInfoCard(
+            connectionSection,
+            tr("Tip: if a model fails to connect, first verify the provider Base URL, API Key, and capability mode before changing prompts."),
+            "warning"
+        );
     }
 
     // Backend server feature removed
@@ -614,8 +1542,11 @@ export class SettingTab extends PluginSettingTab {
                             reader.onload = async (e) => {
                                 try {
                                     const content = e.target?.result as string;
-                                    const settings = JSON.parse(content);
-                                    this.plugin.settings = Object.assign({}, this.plugin.settings, settings);
+                                    const settings = normalizeSettings({
+                                        ...this.plugin.settings,
+                                        ...JSON.parse(content),
+                                    });
+                                    this.plugin.settings = settings;
                                     this.plugin.applyUiLanguage(this.plugin.settings.ui_language);
                                     await this.plugin.saveSettings();
                                     new Notice(t("Settings imported successfully!"));

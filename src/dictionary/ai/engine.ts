@@ -1,6 +1,16 @@
 import { requestUrl } from "obsidian";
 import { t } from "@/lang/helper";
 import type { SearchContext } from "@/constant";
+import type {
+    AISettingsV2,
+    AIScenario,
+    AICustomParameter,
+    AIModelConfig,
+    AIProviderConfig,
+} from "@/ai/config";
+import { resolveAIModelForScenario } from "@/ai/config";
+
+const tr = (key: string) => t(key as any);
 
 type ChatRole = "system" | "user" | "assistant";
 
@@ -18,15 +28,7 @@ type ChatCompletionResponse = {
 };
 
 type AISettingsLike = {
-    ai: {
-        api_key: string;
-        api_url: string;
-        model: string;
-        prompt: string;
-        context_prompt?: string;
-        trans_prompt: string;
-        card_prompt?: string;
-    };
+    ai: AISettingsV2;
 };
 
 type AISearchContext = SearchContext & {
@@ -56,12 +58,25 @@ type AIAutofillResult = {
 };
 
 type RequestChatOptions = {
+    scenario: AIScenario;
     cacheKey?: string;
     maxTokens?: number;
     temperature?: number;
+    topP?: number;
+    modelIdOverride?: string;
+    hasContext?: boolean;
+    bypassCache?: boolean;
 };
 
-// 持久化缓存 (LRU + localStorage)
+type ResolvedRequestConfig = {
+    provider: AIProviderConfig;
+    model: AIModelConfig;
+    prompt: string;
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+};
+
 class PersistentCache<V> {
     private memCache = new Map<string, V>();
     private storageKey: string;
@@ -99,7 +114,6 @@ class PersistentCache<V> {
 
     get(key: string): V | undefined {
         if (!this.memCache.has(key)) return undefined;
-        // LRU: 移到末尾
         const value = this.memCache.get(key)!;
         this.memCache.delete(key);
         this.memCache.set(key, value);
@@ -121,15 +135,17 @@ class PersistentCache<V> {
         this.memCache.set(key, value);
         this.saveToStorage();
     }
-
-    clear(): void {
-        this.memCache.clear();
-        localStorage.removeItem(this.storageKey);
-    }
 }
 
-// 全局持久化缓存实例
 const queryCache = new PersistentCache<any>("langr-ai-cache", 200);
+const RESERVED_BODY_FIELDS = new Set([
+    "model",
+    "messages",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "stream",
+]);
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -202,30 +218,172 @@ function buildCacheKey(kind: string, payload: Record<string, unknown>): string {
     return JSON.stringify({ kind, ...payload });
 }
 
+function assertUsableProvider(provider: AIProviderConfig): void {
+    if (!provider.apiKey) {
+        throw new Error(t("Please configure an API key in settings"));
+    }
+    if (!provider.baseUrl) {
+        throw new Error(tr("Please configure an API URL in settings"));
+    }
+    try {
+        new URL(provider.baseUrl);
+    } catch (_error) {
+        throw new Error(t("Invalid API URL (404)"));
+    }
+}
+
+function parseCustomParameterValue(parameter: AICustomParameter): unknown {
+    switch (parameter.type) {
+        case "number":
+            return typeof parameter.value === "number" ? parameter.value : Number(parameter.value);
+        case "boolean":
+            return typeof parameter.value === "boolean"
+                ? parameter.value
+                : String(parameter.value).toLowerCase() === "true";
+        case "json":
+            if (typeof parameter.value !== "string") {
+                return parameter.value;
+            }
+            try {
+                return JSON.parse(parameter.value);
+            } catch (error: any) {
+                throw new Error(`${tr("Invalid custom parameter JSON")}: ${parameter.key}`);
+            }
+        case "text":
+        default:
+            return String(parameter.value ?? "");
+    }
+}
+
+function isReservedBodyField(key: string): boolean {
+    if (RESERVED_BODY_FIELDS.has(key)) {
+        return true;
+    }
+    return /^reasoning/i.test(key) || /^thinking/i.test(key);
+}
+
+function applyCapabilityFields(body: Record<string, unknown>, provider: AIProviderConfig, model: AIModelConfig): void {
+    if (provider.capabilityMode === "openai-reasoning") {
+        if (model.reasoning.enabled) {
+            body.reasoning = true;
+            body.reasoning_effort = model.reasoning.reasoningEffort;
+        }
+        if (model.thinking.enabled) {
+            body.reasoning = true;
+            if (!body.reasoning_effort) {
+                body.reasoning_effort = model.reasoning.reasoningEffort || "medium";
+            }
+            if (typeof model.thinking.budgetTokens === "number") {
+                body.reasoning_max_tokens = model.thinking.budgetTokens;
+            }
+            if (typeof model.thinking.thinkingBudget === "number") {
+                body.reasoning_budget = model.thinking.thinkingBudget;
+            }
+        }
+        return;
+    }
+
+    if (provider.capabilityMode === "thinking-config") {
+        if (model.reasoning.enabled) {
+            body.reasoning_effort = model.reasoning.reasoningEffort;
+        }
+        if (model.thinking.enabled) {
+            body.thinking_config = {
+                enabled: true,
+                ...(typeof model.thinking.budgetTokens === "number"
+                    ? { budget_tokens: model.thinking.budgetTokens }
+                    : {}),
+                ...(typeof model.thinking.thinkingBudget === "number"
+                    ? { thinking_budget: model.thinking.thinkingBudget }
+                    : {}),
+            };
+        }
+        return;
+    }
+
+    if (provider.capabilityMode === "siliconflow-thinking") {
+        if (model.reasoning.enabled) {
+            body.reasoning_effort = model.reasoning.reasoningEffort;
+        }
+        if (model.thinking.enabled) {
+            body.enable_thinking = true;
+            if (typeof model.thinking.thinkingBudget === "number") {
+                body.thinking_budget = model.thinking.thinkingBudget;
+            }
+        }
+    }
+}
+
+function applyCustomParameters(body: Record<string, unknown>, parameters: AICustomParameter[]): void {
+    parameters.forEach((parameter) => {
+        if (!parameter.key || isReservedBodyField(parameter.key)) {
+            return;
+        }
+        body[parameter.key] = parseCustomParameterValue(parameter);
+    });
+}
+
+function buildRequestConfig(
+    settings: AISettingsLike,
+    messages: ChatMessage[],
+    options: RequestChatOptions
+): ResolvedRequestConfig {
+    const resolved = resolveAIModelForScenario(settings.ai, options.scenario, {
+        modelIdOverride: options.modelIdOverride,
+        hasContext: options.hasContext,
+    });
+
+    assertUsableProvider(resolved.provider);
+
+    const body: Record<string, unknown> = {
+        model: resolved.model.model,
+        messages,
+        max_tokens: options.maxTokens ?? resolved.model.maxOutputTokens ?? 200,
+        temperature: options.temperature ?? resolved.model.temperature ?? 0.3,
+    };
+
+    const topP = options.topP ?? resolved.model.topP;
+    if (typeof topP === "number") {
+        body.top_p = topP;
+    }
+
+    applyCapabilityFields(body, resolved.provider, resolved.model);
+    applyCustomParameters(body, resolved.model.customParameters);
+
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${resolved.provider.apiKey}`,
+    };
+
+    resolved.provider.customHeaders.forEach((header) => {
+        if (header.key) {
+            headers[header.key] = header.value;
+        }
+    });
+
+    return {
+        provider: resolved.provider,
+        model: resolved.model,
+        prompt: resolved.prompt,
+        url: resolved.provider.baseUrl,
+        headers,
+        body,
+    };
+}
+
 async function requestChatCompletion(
     settings: AISettingsLike,
     messages: ChatMessage[],
-    options: RequestChatOptions = {}
+    options: RequestChatOptions
 ): Promise<ChatCompletionResponse> {
-    const { api_key, api_url, model } = settings.ai;
+    const requestConfig = buildRequestConfig(settings, messages, options);
 
-    if (!api_key) {
-        throw new Error(t("Please configure an API key in settings"));
-    }
-
-    if (options.cacheKey) {
+    if (options.cacheKey && !options.bypassCache) {
         const cached = queryCache.get(options.cacheKey);
         if (cached) {
             return cached;
         }
     }
-
-    const body = {
-        model,
-        messages,
-        max_tokens: options.maxTokens ?? 200,
-        temperature: options.temperature ?? 0.3,
-    };
 
     const maxRetries = 3;
     let lastStatus: number | null = null;
@@ -239,18 +397,15 @@ async function requestChatCompletion(
 
         try {
             const response = await requestUrl({
-                url: api_url,
+                url: requestConfig.url,
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${api_key}`,
-                },
-                body: JSON.stringify(body),
+                headers: requestConfig.headers,
+                body: JSON.stringify(requestConfig.body),
                 throw: false,
             });
 
             if (response.status === 200) {
-                if (options.cacheKey) {
+                if (options.cacheKey && !options.bypassCache) {
                     queryCache.set(options.cacheKey, response.json);
                 }
                 return response.json as ChatCompletionResponse;
@@ -280,18 +435,17 @@ async function requestChatCompletion(
 
 function buildContextualSearchMessages(
     text: string,
-    settings: AISettingsLike,
+    prompt: string,
     context?: AISearchContext
 ): ChatMessage[] {
     if (!context?.sentenceText) {
         return [
-            { role: "system", content: settings.ai.prompt },
+            { role: "system", content: prompt },
             { role: "user", content: text },
         ];
     }
 
     const expressionType = text.includes(" ") ? "PHRASE" : "WORD";
-    const systemPrompt = settings.ai.context_prompt || settings.ai.prompt;
     const userContent = [
         `Selected expression: ${text}`,
         `Expression type: ${expressionType}`,
@@ -303,16 +457,15 @@ function buildContextualSearchMessages(
     ].filter(Boolean).join("\n");
 
     return [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: prompt },
         { role: "user", content: userContent },
     ];
 }
 
 function buildAutofillMessages(
     input: AIAutofillInput,
-    settings: AISettingsLike
+    prompt: string
 ): ChatMessage[] {
-    const systemPrompt = settings.ai.card_prompt || settings.ai.prompt;
     const userContent = [
         `Expression: ${input.expression}`,
         input.surface ? `Surface: ${input.surface}` : "",
@@ -329,7 +482,7 @@ function buildAutofillMessages(
     ].filter(Boolean).join("\n");
 
     return [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: prompt },
         { role: "user", content: userContent },
     ];
 }
@@ -362,11 +515,23 @@ export async function search(
     settings: AISettingsLike,
     context?: AISearchContext
 ): Promise<ChatCompletionResponse> {
-    const messages = buildContextualSearchMessages(text, settings, context);
+    const resolved = resolveAIModelForScenario(settings.ai, "search", {
+        hasContext: !!context?.sentenceText,
+    });
+    const messages = buildContextualSearchMessages(text, resolved.prompt, context);
     const cacheKey = buildCacheKey("search", {
+        scenario: "search",
         text,
-        prompt: context?.sentenceText ? (settings.ai.context_prompt || settings.ai.prompt) : settings.ai.prompt,
-        model: settings.ai.model,
+        providerId: resolved.provider.id,
+        modelId: resolved.model.id,
+        model: resolved.model.model,
+        prompt: resolved.prompt,
+        temperature: resolved.model.temperature ?? 0.3,
+        topP: resolved.model.topP ?? null,
+        maxOutputTokens: resolved.model.maxOutputTokens ?? (context?.sentenceText ? 280 : 200),
+        reasoning: resolved.model.reasoning,
+        thinking: resolved.model.thinking,
+        customParameters: resolved.model.customParameters,
         sentenceText: context?.sentenceText || "",
         origin: context?.origin || "",
         nativeLanguage: context?.nativeLanguage || "",
@@ -374,17 +539,21 @@ export async function search(
     });
 
     return requestChatCompletion(settings, messages, {
+        scenario: "search",
         cacheKey,
+        hasContext: !!context?.sentenceText,
         maxTokens: context?.sentenceText ? 280 : 200,
         temperature: 0.3,
     });
 }
 
 export async function translate(text: string, settings: AISettingsLike): Promise<string> {
-    const finalPrompt = settings.ai.trans_prompt.replace("{sentence}", text);
+    const resolved = resolveAIModelForScenario(settings.ai, "translate");
+    const finalPrompt = resolved.prompt.replace("{sentence}", text);
     const response = await requestChatCompletion(settings, [
         { role: "user", content: finalPrompt },
     ], {
+        scenario: "translate",
         maxTokens: 150,
         temperature: 0.3,
     });
@@ -396,8 +565,13 @@ export async function autofillExpression(
     input: AIAutofillInput,
     settings: AISettingsLike
 ): Promise<AIAutofillResult> {
-    const messages = buildAutofillMessages(input, settings);
+    const resolved = resolveAIModelForScenario(settings.ai, "card");
+    const messages = buildAutofillMessages(input, resolved.prompt);
     const cacheKey = buildCacheKey("card-autofill", {
+        scenario: "card",
+        providerId: resolved.provider.id,
+        modelId: resolved.model.id,
+        model: resolved.model.model,
         expression: input.expression,
         surface: input.surface || "",
         type: input.type || "",
@@ -409,11 +583,17 @@ export async function autofillExpression(
         existingNotes: (input.existingNotes || []).join("|"),
         nativeLanguage: input.nativeLanguage || "",
         foreignLanguage: input.foreignLanguage || "",
-        prompt: settings.ai.card_prompt || settings.ai.prompt,
-        model: settings.ai.model,
+        prompt: resolved.prompt,
+        temperature: resolved.model.temperature ?? 0.2,
+        topP: resolved.model.topP ?? null,
+        maxOutputTokens: resolved.model.maxOutputTokens ?? 260,
+        reasoning: resolved.model.reasoning,
+        thinking: resolved.model.thinking,
+        customParameters: resolved.model.customParameters,
     });
 
     const response = await requestChatCompletion(settings, messages, {
+        scenario: "card",
         cacheKey,
         maxTokens: 260,
         temperature: 0.2,
@@ -425,6 +605,21 @@ export async function autofillExpression(
     }
 
     return parseAutofillResponse(content);
+}
+
+export async function testModelConnection(
+    settings: AISettingsLike,
+    modelId: string
+): Promise<void> {
+    await requestChatCompletion(settings, [
+        { role: "user", content: "Ping" },
+    ], {
+        scenario: "search",
+        modelIdOverride: modelId,
+        maxTokens: 5,
+        temperature: 0,
+        bypassCache: true,
+    });
 }
 
 export type {

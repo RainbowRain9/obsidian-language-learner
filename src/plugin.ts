@@ -32,7 +32,7 @@ import { FileDb } from "./db/file_db";
 import { TextParser, state } from "./views/parser";
 import { FrontMatterManager } from "./utils/frontmatter";
 
-import { DEFAULT_SETTINGS, MyPluginSettings, SettingTab } from "./settings";
+import { MyPluginSettings, SettingTab, normalizeSettings } from "./settings";
 import store from "./store";
 import { playAudio } from "./utils/helpers";
 import type { Position, SearchContext } from "./constant";
@@ -1120,35 +1120,15 @@ export default class LanguageLearner extends Plugin {
     }
 
     async loadSettings() {
-        let settings: { [K in string]: any } = Object.assign(
-            {},
-            DEFAULT_SETTINGS
-        );
-        let data = (await this.loadData()) || {};
-        for (let key in DEFAULT_SETTINGS) {
-            let k = key as keyof typeof DEFAULT_SETTINGS;
-            if (data[k] === undefined) {
-                continue;
-            }
-
-            if (typeof DEFAULT_SETTINGS[k] === "object") {
-                Object.assign(settings[k], data[k]);
-            } else {
-                settings[k] = data[k];
-            }
-        }
-        (this.settings as any) = settings;
+        const data = (await this.loadData()) || {};
+        (this.settings as any) = normalizeSettings(data);
         if (data.ui_language === undefined && typeof window !== "undefined") {
             this.settings.ui_language = setLanguage(window.localStorage.getItem("language"), false);
         }
-        // this.settings = Object.assign(
-        //     {},
-        //     DEFAULT_SETTINGS,
-        //     await this.loadData()
-        // );
     }
 
     async saveSettings() {
+        this.settings = normalizeSettings(this.settings);
         await this.saveData(this.settings);
     }
 

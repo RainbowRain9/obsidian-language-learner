@@ -4,7 +4,28 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Added
+
+- AI 设置重构为新的 v2 体系，支持多 provider、多 model、按场景路由和按模型连接测试。
+- 新增中文文档 [`docs/ai_settings_usage.md`](./docs/ai_settings_usage.md)，用于补充 AI 设置的完整使用说明。
+
+### Changed
+
+- AI 设置页改为 `Providers / Models / Routing / Prompts / Connection Test` 结构。
+- AI 请求现在统一走场景解析层，查词、翻译、卡片自动填充都支持默认模型 + 场景覆盖模型。
+- README 已按当前功能更新，AI 相关说明改为以能力和使用方式为主，而不是旧版扁平字段说明。
+
+### Improved
+
+- Provider / Model 列表增加启用状态、路由使用状态和更明确的高亮提示。
+- Provider / Model 删除前会提示当前路由影响与回退行为。
+- Provider 编辑框增加 Base URL、Header 格式等输入校验。
+- Model 编辑框的 `Custom Parameters` 改为结构化编辑，并为 JSON 类型增加即时校验与保存拦截。
+
+### Fixed
+
+- 修复 AI 设置页部分字段、选项和提示文案显示为 `undefined` 的问题。
+- 补齐 AI settings v2 相关的中英文与繁中文案，改善 AI 设置页和弹窗的本地化显示。
 
 ## [0.5.10] - 2026-03-26
 
