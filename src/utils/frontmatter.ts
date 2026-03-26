@@ -1,6 +1,19 @@
 import { App, TFile, parseYaml, stringifyYaml } from "obsidian";
 
 type FrontMatter = { [K in string]: string };
+const FRONTMATTER_BLOCK_REGEX = /^(?:\uFEFF)?(?:\r?\n)*---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/;
+
+function extractFrontMatterBlock(text: string) {
+    const match = text.match(FRONTMATTER_BLOCK_REGEX);
+    if (!match) {
+        return null;
+    }
+
+    return {
+        fullMatch: match[0],
+        body: match[1],
+    };
+}
 
 export class FrontMatterManager {
     app: App;
@@ -14,9 +27,13 @@ export class FrontMatterManager {
         let res = {} as FrontMatter;
         let text = await this.app.vault.read(file);
 
-        let match = text.match(/^\n*---\n([\s\S]+)\n---/);
-        if (match) {
-            res = parseYaml(match[1]);
+        const block = extractFrontMatterBlock(text);
+        if (block) {
+            try {
+                res = parseYaml(block.body) || {};
+            } catch (error) {
+                console.warn("[Language Learner] Failed to parse frontmatter", file.path, error);
+            }
         }
 
         return res;
@@ -28,14 +45,15 @@ export class FrontMatterManager {
         }
 
         let text = await this.app.vault.read(file);
-        let match = text.match(/^\n*---\n([\s\S]+)\n---/);
+        const block = extractFrontMatterBlock(text);
 
         let newText = "";
         let newFront = stringifyYaml(fm);
-        if (match) {
-            newText = text.replace(/^\n*---\n([\s\S]+)\n---/, `---\n${newFront}---`);
+        const serializedFrontMatter = `---\n${newFront}---`;
+        if (block) {
+            newText = text.replace(block.fullMatch, serializedFrontMatter);
         } else {
-            newText = `---\n${newFront}---\n\n` + text;
+            newText = `${serializedFrontMatter}\n\n${text}`;
         }
 
         this.app.vault.modify(file, newText);

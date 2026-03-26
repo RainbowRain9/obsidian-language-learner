@@ -385,17 +385,6 @@ export class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName(t("Card Prompt"))
-            .setDesc(t("Prompt for AI autofill. Return JSON for meaning, aliases, tags, and notes."))
-            .addTextArea(text => text
-                .setValue(this.plugin.settings.ai.card_prompt)
-                .onChange(async (value) => {
-                    this.plugin.settings.ai.card_prompt = value;
-                    await this.plugin.saveSettings();
-                })
-            );
-
-        new Setting(containerEl)
             .setName(t("Test Connection"))
             .setDesc(t("Test whether the current API configuration works"))
             .addButton(button => button
