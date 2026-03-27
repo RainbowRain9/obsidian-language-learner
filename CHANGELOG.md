@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 暂无待发布更新。
+
+## [0.6.0] - 2026-03-27
+
 ### Changed
 
 - 学习面板顶部主字段改为响应式两列布局；在较宽面板中会按 `Expression | Surface`、`Meaning | aliases` 排列，在窄宽度下自动回落为单列。
