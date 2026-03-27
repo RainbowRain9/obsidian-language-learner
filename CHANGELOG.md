@@ -11,6 +11,7 @@
 ### Fixed
 
 - 修复 `meaning` 在导入、自动填充和清洗流程中如果以右括号结尾时，末尾 `)` / `）` 可能被误删的问题。
+- 修复 `npm run release:version:push -- <version>` 会把版本号误判为 release mode、导致无法按指定版本直接发布的问题。
 
 ## [0.5.12] - 2026-03-27
 

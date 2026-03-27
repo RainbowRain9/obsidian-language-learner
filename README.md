@@ -363,7 +363,7 @@ npm run release:major:push
 npm run release:version:push -- 0.5.1
 ```
 
-上面的命令会自动：
+上面的命令现在会直接把 `0.5.1` 作为目标版本传给发布脚本，并自动：
 
 1. 更新 `package.json` 和 `package-lock.json`
 2. 通过 `version` 脚本同步 `manifest.json` 和 `versions.json`
