@@ -46,6 +46,39 @@ export type MeaningAutofillMode =
     | "youdao-basic"
     | "context-pos";
 
+export type AIAutofillTriggerMode =
+    | "off"
+    | "manual"
+    | "auto"
+    | "manual-and-auto";
+
+export type AIAutofillWriteMode =
+    | "fill-empty"
+    | "merge"
+    | "overwrite";
+
+export type AIAutofillFieldKey =
+    | "meaning"
+    | "aliases"
+    | "tags"
+    | "notes";
+
+export interface AIAutofillFieldStrategy {
+    triggerMode: AIAutofillTriggerMode;
+    writeMode: AIAutofillWriteMode;
+}
+
+export interface AIAutofillFieldConfig {
+    meaning: AIAutofillFieldStrategy;
+    aliases: AIAutofillFieldStrategy;
+    tags: AIAutofillFieldStrategy;
+    notes: AIAutofillFieldStrategy;
+}
+
+export interface AIAutofillSettings {
+    fields: AIAutofillFieldConfig;
+}
+
 export interface MyPluginSettings {
     use_server: boolean;
     port: number;
@@ -89,8 +122,20 @@ export interface MyPluginSettings {
     last_word_db_hash?: string;
     // ai
     ai: AISettingsV2;
+    ai_autofill: AIAutofillSettings;
     // ui
     activeTab: string;
+}
+
+function createDefaultAIAutofillSettings(): AIAutofillSettings {
+    return {
+        fields: {
+            meaning: { triggerMode: "manual", writeMode: "fill-empty" },
+            aliases: { triggerMode: "manual", writeMode: "fill-empty" },
+            tags: { triggerMode: "manual", writeMode: "merge" },
+            notes: { triggerMode: "manual", writeMode: "merge" },
+        },
+    };
 }
 
 export const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -140,11 +185,104 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     last_sync: "1970-01-01T00:00:00Z",
     last_word_db_hash: "",
     ai: createDefaultAISettings(),
+    ai_autofill: createDefaultAIAutofillSettings(),
     activeTab: "general"
 };
 
 function isRecord(value: unknown): value is Record<string, any> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAIAutofillTriggerMode(value: unknown): value is AIAutofillTriggerMode {
+    return value === "off" || value === "manual" || value === "auto" || value === "manual-and-auto";
+}
+
+function isAIAutofillWriteMode(value: unknown): value is AIAutofillWriteMode {
+    return value === "fill-empty" || value === "merge" || value === "overwrite";
+}
+
+function getLegacyAIAutofillWriteMode(
+    field: AIAutofillFieldKey,
+    preserveMeaningAndAliases: boolean | undefined,
+    fallback: AIAutofillWriteMode
+): AIAutofillWriteMode {
+    switch (field) {
+        case "meaning":
+            return preserveMeaningAndAliases === false ? "overwrite" : "fill-empty";
+        case "aliases":
+            return preserveMeaningAndAliases === false ? "merge" : "fill-empty";
+        case "tags":
+        case "notes":
+        default:
+            return fallback;
+    }
+}
+
+function normalizeAIAutofillFieldStrategy(
+    field: AIAutofillFieldKey,
+    value: unknown,
+    fallback: AIAutofillFieldStrategy,
+    legacyTriggerMode?: AIAutofillTriggerMode,
+    legacyPreserveMeaningAndAliases?: boolean
+): AIAutofillFieldStrategy {
+    if (isRecord(value)) {
+        return {
+            triggerMode: isAIAutofillTriggerMode(value.triggerMode) ? value.triggerMode : fallback.triggerMode,
+            writeMode: isAIAutofillWriteMode(value.writeMode) ? value.writeMode : fallback.writeMode,
+        };
+    }
+
+    if (typeof value === "boolean") {
+        return {
+            triggerMode: value ? (legacyTriggerMode || fallback.triggerMode) : "off",
+            writeMode: getLegacyAIAutofillWriteMode(field, legacyPreserveMeaningAndAliases, fallback.writeMode),
+        };
+    }
+
+    return fallback;
+}
+
+function normalizeAIAutofillSettings(value: unknown): AIAutofillSettings {
+    const defaults = createDefaultAIAutofillSettings();
+    const source = isRecord(value) ? value : {};
+    const fields = isRecord(source.fields) ? source.fields : {};
+    const legacyTriggerMode = isAIAutofillTriggerMode(source.triggerMode) ? source.triggerMode : undefined;
+    const legacyPreserveMeaningAndAliases = typeof source.preserveMeaningAndAliases === "boolean"
+        ? source.preserveMeaningAndAliases
+        : undefined;
+
+    return {
+        fields: {
+            meaning: normalizeAIAutofillFieldStrategy(
+                "meaning",
+                fields.meaning,
+                defaults.fields.meaning,
+                legacyTriggerMode,
+                legacyPreserveMeaningAndAliases
+            ),
+            aliases: normalizeAIAutofillFieldStrategy(
+                "aliases",
+                fields.aliases,
+                defaults.fields.aliases,
+                legacyTriggerMode,
+                legacyPreserveMeaningAndAliases
+            ),
+            tags: normalizeAIAutofillFieldStrategy(
+                "tags",
+                fields.tags,
+                defaults.fields.tags,
+                legacyTriggerMode,
+                legacyPreserveMeaningAndAliases
+            ),
+            notes: normalizeAIAutofillFieldStrategy(
+                "notes",
+                fields.notes,
+                defaults.fields.notes,
+                legacyTriggerMode,
+                legacyPreserveMeaningAndAliases
+            ),
+        },
+    };
 }
 
 export function normalizeSettings(data: unknown): MyPluginSettings {
@@ -160,6 +298,7 @@ export function normalizeSettings(data: unknown): MyPluginSettings {
             ...dictionaries,
         },
         ai: normalizeAISettings(source.ai),
+        ai_autofill: normalizeAIAutofillSettings(source.ai_autofill),
         activeTab: typeof source.activeTab === "string" ? source.activeTab : defaults.activeTab,
     };
 }
@@ -245,6 +384,32 @@ function getCapabilityModeLabel(mode: AICapabilityMode): string {
         case "openai-reasoning":
         default:
             return "reasoning / reasoning_effort";
+    }
+}
+
+function getAIAutofillTriggerLabel(mode: AIAutofillTriggerMode): string {
+    switch (mode) {
+        case "off":
+            return tr("Disabled");
+        case "auto":
+            return tr("Auto");
+        case "manual-and-auto":
+            return tr("Auto + Manual button");
+        case "manual":
+        default:
+            return tr("Manual only");
+    }
+}
+
+function getAIAutofillWriteModeLabel(mode: AIAutofillWriteMode): string {
+    switch (mode) {
+        case "overwrite":
+            return tr("Overwrite existing");
+        case "merge":
+            return tr("Merge with existing");
+        case "fill-empty":
+        default:
+            return tr("Fill empty only");
     }
 }
 
@@ -1392,6 +1557,96 @@ export class SettingTab extends PluginSettingTab {
                     this.plugin.settings.ai.prompts.card = value;
                     await refresh();
                 }));
+
+        const autofillSection = createAISection(
+            containerEl,
+            tr("AI Autofill Settings"),
+            tr("Control which fields AI card autofill writes, and whether it runs manually, automatically, or both.")
+        );
+        const autofillSettings = this.plugin.settings.ai_autofill;
+        const autofillFieldMeta: Array<{
+            key: AIAutofillFieldKey;
+            label: string;
+            strategyLabel: string;
+            description: string;
+            allowedWriteModes: AIAutofillWriteMode[];
+        }> = [
+            {
+                key: "meaning",
+                label: tr("Meaning"),
+                strategyLabel: tr("Meaning Strategy"),
+                description: tr("Control when and how AI writes the meaning field"),
+                allowedWriteModes: ["fill-empty", "overwrite"],
+            },
+            {
+                key: "aliases",
+                label: tr("aliases"),
+                strategyLabel: tr("Aliases Strategy"),
+                description: tr("Control when and how AI writes aliases / inflections"),
+                allowedWriteModes: ["fill-empty", "merge", "overwrite"],
+            },
+            {
+                key: "tags",
+                label: tr("Tags"),
+                strategyLabel: tr("Tags Strategy"),
+                description: tr("Control when and how AI writes suggested tags"),
+                allowedWriteModes: ["merge", "overwrite"],
+            },
+            {
+                key: "notes",
+                label: tr("Notes"),
+                strategyLabel: tr("Notes Strategy"),
+                description: tr("Control when and how AI writes study notes"),
+                allowedWriteModes: ["merge", "overwrite"],
+            },
+        ];
+        const fieldSummaries = autofillFieldMeta.map(({ key, label }) => {
+            const strategy = autofillSettings.fields[key];
+            return `${label}: ${getAIAutofillTriggerLabel(strategy.triggerMode)} / ${getAIAutofillWriteModeLabel(strategy.writeMode)}`;
+        });
+        const saveAutofillSettings = async (redisplay = false) => {
+            this.plugin.settings.ai_autofill = normalizeAIAutofillSettings(this.plugin.settings.ai_autofill);
+            await this.plugin.saveSettings();
+            window.dispatchEvent(new CustomEvent("obsidian-langr-ai-autofill-settings-change"));
+            if (redisplay) {
+                this.display();
+            }
+        };
+
+        createInfoCard(
+            autofillSection,
+            fieldSummaries.join("  •  ")
+        );
+        createInfoCard(
+            autofillSection,
+            tr("Tip: if you want AI to take over meaning generation, set Meaning Autofill to Disable in General settings."),
+            "warning"
+        );
+        autofillFieldMeta.forEach(({ key, strategyLabel, description, allowedWriteModes }) => {
+            new Setting(autofillSection)
+                .setName(strategyLabel)
+                .setDesc(description)
+                .addDropdown((dropdown) => dropdown
+                    .addOption("off", tr("Disabled"))
+                    .addOption("manual", tr("Manual only"))
+                    .addOption("auto", tr("Auto"))
+                    .addOption("manual-and-auto", tr("Auto + Manual button"))
+                    .setValue(autofillSettings.fields[key].triggerMode)
+                    .onChange(async (value: AIAutofillTriggerMode) => {
+                        this.plugin.settings.ai_autofill.fields[key].triggerMode = value;
+                        await saveAutofillSettings(true);
+                    }))
+                .addDropdown((dropdown) => {
+                    allowedWriteModes.forEach((mode) => {
+                        dropdown.addOption(mode, getAIAutofillWriteModeLabel(mode));
+                    });
+                    dropdown.setValue(autofillSettings.fields[key].writeMode)
+                        .onChange(async (value: AIAutofillWriteMode) => {
+                            this.plugin.settings.ai_autofill.fields[key].writeMode = value;
+                            await saveAutofillSettings(true);
+                        });
+                });
+        });
 
         const connectionSection = createAISection(
             containerEl,

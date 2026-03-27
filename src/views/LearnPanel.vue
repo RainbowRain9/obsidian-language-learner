@@ -139,14 +139,22 @@
 					{{ t("Submit") }}
 				</NButton>
 				<NButton
+					v-if="showManualAIAutofillButton"
 					size="small"
 					class="footer-action-btn footer-action-btn--secondary"
 					@click="runAIAutofill"
 					:loading="aiAutofillLoading"
 					:disabled="submitLoading"
+					:title="manualAIAutofillHint"
 				>
 					{{ t("AI Autofill") }}
 				</NButton>
+			</div>
+			<div
+				v-if="showManualAIAutofillButton"
+				class="footer-ai-hint"
+			>
+				{{ manualAIAutofillHint }}
 			</div>
 			<!-- </NThemeEditor> -->
 		</NConfigProvider>
@@ -183,7 +191,11 @@ import {
 
 import { ExpressionInfo, Sentence } from "@/db/interface";
 import { t } from "@/lang/helper";
-import type { MeaningAutofillMode } from "@/settings";
+import type {
+	AIAutofillFieldKey,
+	AIAutofillWriteMode,
+	MeaningAutofillMode
+} from "@/settings";
 import { useEvent } from "@/utils/use";
 import { analyzeWordSelection } from "@/utils/word-analysis";
 import { LearnPanelView } from "./LearnPanelView";
@@ -329,6 +341,55 @@ async function tagSearch(query: string) {
 // 提交信息到数据库的加载状态
 let submitLoading = ref(false);
 let aiAutofillLoading = ref(false);
+let aiAutofillRunId = 0;
+const aiAutofillSettingsVersion = ref(0);
+
+type RunAIAutofillOptions = {
+	source?: "manual" | "auto";
+	silent?: boolean;
+	selectionTokenSnapshot?: number;
+};
+
+const AI_AUTOFILL_FIELD_KEYS: AIAutofillFieldKey[] = ["meaning", "aliases", "tags", "notes"];
+
+const manualAIAutofillFields = computed<AIAutofillFieldKey[]>(() => {
+	aiAutofillSettingsVersion.value;
+	return AI_AUTOFILL_FIELD_KEYS.filter((field) => {
+		const triggerMode = plugin.settings.ai_autofill.fields[field].triggerMode;
+		return triggerMode === "manual" || triggerMode === "manual-and-auto";
+	});
+});
+
+const autoAIAutofillFields = computed<AIAutofillFieldKey[]>(() => {
+	aiAutofillSettingsVersion.value;
+	return AI_AUTOFILL_FIELD_KEYS.filter((field) => {
+		const triggerMode = plugin.settings.ai_autofill.fields[field].triggerMode;
+		return triggerMode === "auto" || triggerMode === "manual-and-auto";
+	});
+});
+
+const showManualAIAutofillButton = computed(() => {
+	return manualAIAutofillFields.value.length > 0;
+});
+
+const manualAIAutofillHint = computed(() => {
+	const labels = manualAIAutofillFields.value.map((field) => {
+		switch (field) {
+			case "meaning":
+				return t("Meaning");
+			case "aliases":
+				return t("aliases");
+			case "tags":
+				return t("Tags");
+			case "notes":
+				return t("Notes");
+			default:
+				return field;
+		}
+	});
+
+	return `${t("AI Autofill fields")}: ${labels.join(" / ")}`;
+});
 
 function normalizeWordValue(value?: string | null): string {
 	return (value || "").trim().toLowerCase();
@@ -441,12 +502,123 @@ function getPrimarySentenceContext(): Sentence | null {
 	return sentences.find((sentence) => sanitizeSentenceText(sentence.text)) || null;
 }
 
-async function runAIAutofill() {
+useEvent(window, "obsidian-langr-ai-autofill-settings-change", () => {
+	aiAutofillSettingsVersion.value += 1;
+});
+
+function isSelectionStillCurrent(selectionTokenSnapshot?: number): boolean {
+	return selectionTokenSnapshot === undefined || selectionToken.value === selectionTokenSnapshot;
+}
+
+function getAIAutofillFieldsForSource(source: "manual" | "auto"): AIAutofillFieldKey[] {
+	return source === "manual" ? manualAIAutofillFields.value : autoAIAutofillFields.value;
+}
+
+function fieldNeedsAutofill(field: AIAutofillFieldKey): boolean {
+	const strategy = plugin.settings.ai_autofill.fields[field];
+	switch (field) {
+		case "meaning":
+			return strategy.writeMode === "overwrite" || !cleanMeaningText(model.value.meaning);
+		case "aliases":
+			return strategy.writeMode !== "fill-empty" || aliasesInputToList(model.value.aliases).length === 0;
+		case "tags":
+			return true;
+		case "notes":
+			return true;
+		default:
+			return false;
+	}
+}
+
+function shouldRunAutoAIAutofill(selectedFields: AIAutofillFieldKey[]): boolean {
+	if (selectedFields.length === 0) {
+		return false;
+	}
+
+	return selectedFields.some((field) => fieldNeedsAutofill(field));
+}
+
+function applyAIAutofillWriteMode(
+	field: AIAutofillFieldKey,
+	writeMode: AIAutofillWriteMode,
+	result: Awaited<ReturnType<typeof autofillExpression>>
+): string | string[] {
+	switch (field) {
+		case "meaning": {
+			const aiMeaning = cleanMeaningText(result.meaning);
+			if (!aiMeaning) {
+				return model.value.meaning || "";
+			}
+			if (writeMode === "overwrite") {
+				return aiMeaning;
+			}
+			return cleanMeaningText(model.value.meaning) ? (model.value.meaning || "") : aiMeaning;
+		}
+		case "aliases": {
+			const normalizedExpression = normalizeWordValue(model.value.expression);
+			const normalizedSurface = normalizeSurfaceValue(model.value.surface);
+			if (writeMode === "overwrite") {
+				return aliasesToInputValue(
+					normalizeAliasesValue(result.aliases || [], normalizedExpression, normalizedSurface)
+				);
+			}
+			if (writeMode === "merge") {
+				return aliasesToInputValue(
+					normalizeAliasesValue(
+						model.value.aliases,
+						normalizedExpression,
+						normalizedSurface,
+						result.aliases || []
+					)
+				);
+			}
+			return aliasesInputToList(model.value.aliases).length > 0
+				? (model.value.aliases || "")
+				: aliasesToInputValue(
+					normalizeAliasesValue(result.aliases || [], normalizedExpression, normalizedSurface)
+				);
+		}
+		case "tags":
+			return writeMode === "overwrite"
+				? mergeUniqueTextList(result.tags || [])
+				: mergeUniqueTextList(model.value.tags || [], result.tags || []);
+		case "notes":
+			return writeMode === "overwrite"
+				? mergeUniqueTextList(result.notes || [])
+				: mergeUniqueTextList(model.value.notes || [], result.notes || []);
+		default:
+			return "";
+	}
+}
+
+async function runAIAutofill(options: RunAIAutofillOptions = {}) {
+	const source = options.source || "manual";
+	const silent = options.silent ?? false;
+	const selectedFields = getAIAutofillFieldsForSource(source);
+
 	if (!model.value.expression?.trim()) {
-		new Notice(t("Expression is empty!"));
+		if (!silent) {
+			new Notice(t("Expression is empty!"));
+		}
 		return;
 	}
 
+	if (selectedFields.length === 0) {
+		if (!silent) {
+			new Notice(t("Please enable at least one AI autofill field in settings"));
+		}
+		return;
+	}
+
+	if (source === "auto" && !shouldRunAutoAIAutofill(selectedFields)) {
+		return;
+	}
+
+	if (!isSelectionStillCurrent(options.selectionTokenSnapshot)) {
+		return;
+	}
+
+	const currentRunId = ++aiAutofillRunId;
 	aiAutofillLoading.value = true;
 	try {
 		const primarySentence = getPrimarySentenceContext();
@@ -462,21 +634,33 @@ async function runAIAutofill() {
 			existingNotes: mergeUniqueTextList(model.value.notes || []),
 			nativeLanguage: plugin.settings.native,
 			foreignLanguage: plugin.settings.foreign,
+			requestedFields: selectedFields,
 		}, plugin.settings);
 
-		const nextMeaning = model.value.meaning?.trim()
-			? model.value.meaning
-			: cleanMeaningText(result.meaning);
-		const nextAliases = aliasesToInputValue(
-			normalizeAliasesValue(
-				model.value.aliases,
-				normalizeWordValue(model.value.expression),
-				normalizeSurfaceValue(model.value.surface),
-				result.aliases || []
-			)
-		);
-		const nextTags = mergeUniqueTextList(model.value.tags || [], result.tags || []);
-		const nextNotes = mergeUniqueTextList(model.value.notes || [], result.notes || []);
+		if (!isSelectionStillCurrent(options.selectionTokenSnapshot)) {
+			return;
+		}
+
+		let nextMeaning = model.value.meaning || "";
+		let nextAliases = model.value.aliases || "";
+		let nextTags = [...(model.value.tags || [])];
+		let nextNotes = [...(model.value.notes || [])];
+
+		if (selectedFields.includes("meaning")) {
+			nextMeaning = applyAIAutofillWriteMode("meaning", plugin.settings.ai_autofill.fields.meaning.writeMode, result) as string;
+		}
+
+		if (selectedFields.includes("aliases")) {
+			nextAliases = applyAIAutofillWriteMode("aliases", plugin.settings.ai_autofill.fields.aliases.writeMode, result) as string;
+		}
+
+		if (selectedFields.includes("tags")) {
+			nextTags = applyAIAutofillWriteMode("tags", plugin.settings.ai_autofill.fields.tags.writeMode, result) as string[];
+		}
+
+		if (selectedFields.includes("notes")) {
+			nextNotes = applyAIAutofillWriteMode("notes", plugin.settings.ai_autofill.fields.notes.writeMode, result) as string[];
+		}
 
 		const changed =
 			nextMeaning !== (model.value.meaning || "") ||
@@ -489,15 +673,20 @@ async function runAIAutofill() {
 		model.value.tags = nextTags;
 		model.value.notes = nextNotes;
 
-		new Notice(t(changed ? "AI autofill applied" : "AI autofill made no changes"));
+		if (!silent) {
+			new Notice(t(changed ? "AI autofill applied" : "AI autofill made no changes"));
+		}
 	} catch (e: any) {
 		const latestLog = getLatestAIDebugLog();
-		new Notice(`${t("AI autofill failed")}${e?.message ? `: ${e.message}` : ""}`);
+		if (!silent) {
+			new Notice(`${t("AI autofill failed")}${e?.message ? `: ${e.message}` : ""}`);
+		}
 		console.error("[Language Learner][AI][autofill] Autofill failed", {
 			expression: model.value.expression,
 			surface: model.value.surface,
 			type: model.value.t,
 			sentences: model.value.sentences,
+			requestedFields: selectedFields,
 			error: e,
 			latestLog,
 		});
@@ -505,7 +694,9 @@ async function runAIAutofill() {
 			console.info("[Language Learner][AI][autofill][latest-log]\n" + formatAIDebugLog(latestLog));
 		}
 	} finally {
-		aiAutofillLoading.value = false;
+		if (currentRunId === aiAutofillRunId) {
+			aiAutofillLoading.value = false;
+		}
 	}
 }
 
@@ -1198,6 +1389,14 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 				model.value.meaning = cleanMeaningText(autofilledMeaning);
 			}
 		}
+
+		if (isCurrent()) {
+			void runAIAutofill({
+				source: "auto",
+				silent: true,
+				selectionTokenSnapshot: token,
+			});
+		}
 	})();
 
 	void (async () => {
@@ -1327,6 +1526,14 @@ watch(() => model.value, () => {
 			color: var(--interactive-accent);
 			background: var(--background-modifier-hover);
 		}
+	}
+
+	.footer-ai-hint {
+		margin-top: 6px;
+		font-size: 12px;
+		line-height: 1.4;
+		color: var(--text-muted);
+		text-align: right;
 	}
 
     /* 隐藏默认的按钮组（如果还有残留） */

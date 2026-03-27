@@ -56,6 +56,7 @@ type AIAutofillInput = {
     existingNotes?: string[];
     nativeLanguage?: string;
     foreignLanguage?: string;
+    requestedFields?: Array<"meaning" | "aliases" | "tags" | "notes">;
 };
 
 type AIAutofillResult = {
@@ -666,6 +667,9 @@ function buildAutofillMessages(
     input: AIAutofillInput,
     prompt: string
 ): ChatMessage[] {
+    const requestedFields = input.requestedFields?.length
+        ? input.requestedFields
+        : ["meaning", "aliases", "tags", "notes"];
     const userContent = [
         `Expression: ${input.expression}`,
         input.surface ? `Surface: ${input.surface}` : "",
@@ -678,8 +682,9 @@ function buildAutofillMessages(
         input.existingAliases?.length ? `Existing aliases: ${input.existingAliases.join(", ")}` : "",
         input.existingTags?.length ? `Existing tags: ${input.existingTags.join(", ")}` : "",
         input.existingNotes?.length ? `Existing notes: ${input.existingNotes.join(" | ")}` : "",
+        `Requested fields: ${requestedFields.join(", ")}`,
         "Do not output reasoning, analysis, or markdown code fences.",
-        "Return only compact valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}.",
+        "Return only compact valid JSON. Include only the requested keys from {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}.",
     ].filter(Boolean).join("\n");
 
     return [
@@ -807,6 +812,7 @@ export async function autofillExpression(
         existingNotes: (input.existingNotes || []).join("|"),
         nativeLanguage: input.nativeLanguage || "",
         foreignLanguage: input.foreignLanguage || "",
+        requestedFields: (input.requestedFields || []).join("|"),
         prompt: resolved.prompt,
         temperature: resolved.model.temperature ?? 0.2,
         topP: resolved.model.topP ?? null,
