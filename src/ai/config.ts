@@ -3,7 +3,8 @@ export type AIProviderPreset = "openai" | "gemini" | "deepseek" | "siliconflow" 
 export type AICapabilityMode =
     | "openai-reasoning"
     | "thinking-config"
-    | "siliconflow-thinking";
+    | "siliconflow-thinking"
+    | "zhipu-thinking";
 
 export type AIReasoningEffort = "low" | "medium" | "high";
 
@@ -247,7 +248,10 @@ export function isProviderPreset(value: unknown): value is AIProviderPreset {
 }
 
 export function isCapabilityMode(value: unknown): value is AICapabilityMode {
-    return value === "openai-reasoning" || value === "thinking-config" || value === "siliconflow-thinking";
+    return value === "openai-reasoning"
+        || value === "thinking-config"
+        || value === "siliconflow-thinking"
+        || value === "zhipu-thinking";
 }
 
 function normalizeReasoningConfig(value: unknown): AIReasoningConfig {
@@ -686,4 +690,3 @@ export function createCustomProviderId(existingIds: Iterable<string>): string {
 export function getRecommendedModelsForProvider(provider: AIProviderConfig): string[] {
     return getProviderPresetMeta(provider.preset)?.recommendedModels || [];
 }
-

@@ -130,12 +130,22 @@
 			<div class="footer-actions">
 				<NButton
 					size="small"
-					class="footer-action-btn"
+					class="footer-action-btn footer-action-btn--primary"
 					attr-type="submit"
 					@click="submit"
 					:loading="submitLoading"
+					:disabled="aiAutofillLoading"
 				>
 					{{ t("Submit") }}
+				</NButton>
+				<NButton
+					size="small"
+					class="footer-action-btn footer-action-btn--secondary"
+					@click="runAIAutofill"
+					:loading="aiAutofillLoading"
+					:disabled="submitLoading"
+				>
+					{{ t("AI Autofill") }}
 				</NButton>
 			</div>
 			<!-- </NThemeEditor> -->
@@ -182,8 +192,14 @@ import Plugin from "@/plugin";
 import { search as cambridgeSearch } from "@dict/cambridge/engine";
 import { search as youdaoSearch, YoudaoResultLex } from "@dict/youdao/engine";
 import { search as googleTranslate } from "@dict/google/engine";
-import { translate as aiTranslate } from "@dict/ai/engine";
+import {
+	autofillExpression,
+	formatAIDebugLog,
+	getLatestAIDebugLog,
+	translate as aiTranslate
+} from "@dict/ai/engine";
 import store from "@/store";
+const tr = (key: string) => t(key as any);
 
 const view: LearnPanelView =
 	getCurrentInstance().appContext.config.globalProperties.view;
@@ -312,6 +328,7 @@ async function tagSearch(query: string) {
 
 // 提交信息到数据库的加载状态
 let submitLoading = ref(false);
+let aiAutofillLoading = ref(false);
 
 function normalizeWordValue(value?: string | null): string {
 	return (value || "").trim().toLowerCase();
@@ -409,6 +426,87 @@ function mergeUniqueTextList(existing: string[] = [], incoming: string[] = []): 
 	});
 
 	return merged;
+}
+
+function aliasesInputToList(value: string[] | string | null | undefined): string[] {
+	return normalizeAliasesValue(
+		value,
+		normalizeWordValue(model.value.expression),
+		normalizeSurfaceValue(model.value.surface)
+	);
+}
+
+function getPrimarySentenceContext(): Sentence | null {
+	const sentences = dedupeSentences(model.value.sentences || []);
+	return sentences.find((sentence) => sanitizeSentenceText(sentence.text)) || null;
+}
+
+async function runAIAutofill() {
+	if (!model.value.expression?.trim()) {
+		new Notice(t("Expression is empty!"));
+		return;
+	}
+
+	aiAutofillLoading.value = true;
+	try {
+		const primarySentence = getPrimarySentenceContext();
+		const result = await autofillExpression({
+			expression: normalizeWordValue(model.value.expression),
+			surface: normalizeSurfaceValue(model.value.surface),
+			type: model.value.t,
+			sentenceText: primarySentence?.text || "",
+			origin: primarySentence?.origin || "",
+			existingMeaning: cleanMeaningText(model.value.meaning),
+			existingAliases: aliasesInputToList(model.value.aliases),
+			existingTags: mergeUniqueTextList(model.value.tags || []),
+			existingNotes: mergeUniqueTextList(model.value.notes || []),
+			nativeLanguage: plugin.settings.native,
+			foreignLanguage: plugin.settings.foreign,
+		}, plugin.settings);
+
+		const nextMeaning = model.value.meaning?.trim()
+			? model.value.meaning
+			: cleanMeaningText(result.meaning);
+		const nextAliases = aliasesToInputValue(
+			normalizeAliasesValue(
+				model.value.aliases,
+				normalizeWordValue(model.value.expression),
+				normalizeSurfaceValue(model.value.surface),
+				result.aliases || []
+			)
+		);
+		const nextTags = mergeUniqueTextList(model.value.tags || [], result.tags || []);
+		const nextNotes = mergeUniqueTextList(model.value.notes || [], result.notes || []);
+
+		const changed =
+			nextMeaning !== (model.value.meaning || "") ||
+			nextAliases !== (model.value.aliases || "") ||
+			JSON.stringify(nextTags) !== JSON.stringify(model.value.tags || []) ||
+			JSON.stringify(nextNotes) !== JSON.stringify(model.value.notes || []);
+
+		model.value.meaning = nextMeaning;
+		model.value.aliases = nextAliases;
+		model.value.tags = nextTags;
+		model.value.notes = nextNotes;
+
+		new Notice(t(changed ? "AI autofill applied" : "AI autofill made no changes"));
+	} catch (e: any) {
+		const latestLog = getLatestAIDebugLog();
+		new Notice(`${t("AI autofill failed")}${e?.message ? `: ${e.message}` : ""}`);
+		console.error("[Language Learner][AI][autofill] Autofill failed", {
+			expression: model.value.expression,
+			surface: model.value.surface,
+			type: model.value.t,
+			sentences: model.value.sentences,
+			error: e,
+			latestLog,
+		});
+		if (latestLog) {
+			console.info("[Language Learner][AI][autofill][latest-log]\n" + formatAIDebugLog(latestLog));
+		}
+	} finally {
+		aiAutofillLoading.value = false;
+	}
 }
 
 async function submit() {
@@ -1153,15 +1251,39 @@ const toggleTrans = async (index: number, element: any) => {
         }
         result = decodeHtmlEntities(result);
 
-        // 3. 更新结果和缓存
-        if (result) {
-            element.trans = result;
-            translationCache.value[sentence][newType] = result;
-            translationTypes.value[index] = newType;
+        if (!result) {
+            const message = newType === "ai"
+                ? tr("AI translation returned empty content")
+                : tr("Machine translation returned empty content");
+            new Notice(message);
+            const latestLog = getLatestAIDebugLog();
+            console.warn("[Language Learner][translate] Empty translation result", {
+                type: newType,
+                sentence,
+                latestLog,
+            });
+            if (latestLog && newType === "ai") {
+                console.info("[Language Learner][AI][translate][latest-log]\n" + formatAIDebugLog(latestLog));
+            }
+            return;
         }
-    } catch (e) {
-        new Notice(t("Translation failed"));
-        console.error(e);
+
+        // 3. 更新结果和缓存
+        element.trans = result;
+        translationCache.value[sentence][newType] = result;
+        translationTypes.value[index] = newType;
+    } catch (e: any) {
+        const latestLog = getLatestAIDebugLog();
+        new Notice(`${t("Translation failed")}${e?.message ? `: ${e.message}` : ""}`);
+        console.error("[Language Learner][translate] Translation failed", {
+            type: newType,
+            sentence,
+            error: e,
+            latestLog,
+        });
+        if (latestLog && newType === "ai") {
+            console.info("[Language Learner][AI][translate][latest-log]\n" + formatAIDebugLog(latestLog));
+        }
     }
 };
 
@@ -1189,6 +1311,22 @@ watch(() => model.value, () => {
 
 	.footer-action-btn {
 		flex: 1;
+	}
+
+	.footer-action-btn--primary {
+		font-weight: 600;
+	}
+
+	.footer-action-btn--secondary {
+		border: 1px solid var(--background-modifier-border);
+		background: var(--background-secondary);
+		color: var(--text-normal);
+
+		&:hover:not(.n-button--disabled) {
+			border-color: var(--interactive-accent);
+			color: var(--interactive-accent);
+			background: var(--background-modifier-hover);
+		}
 	}
 
     /* 隐藏默认的按钮组（如果还有残留） */

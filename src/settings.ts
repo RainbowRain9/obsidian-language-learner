@@ -27,7 +27,13 @@ import {
     normalizeAIProviderConfig,
     normalizeAISettings,
 } from "./ai/config";
-import { testModelConnection } from "@dict/ai/engine";
+import {
+    clearAIDebugLogs,
+    formatAIDebugLog,
+    getAIDebugLogs,
+    getLatestAIDebugLog,
+    testModelConnection,
+} from "@dict/ai/engine";
 
 // Import external CSS for settings panel
 import "./styles/settings.css";
@@ -234,6 +240,8 @@ function getCapabilityModeLabel(mode: AICapabilityMode): string {
             return "thinking_config";
         case "siliconflow-thinking":
             return "enable_thinking";
+        case "zhipu-thinking":
+            return "thinking.type";
         case "openai-reasoning":
         default:
             return "reasoning / reasoning_effort";
@@ -512,6 +520,7 @@ class AIProviderModal extends Modal {
                 .addOption("openai-reasoning", `OpenAI-compatible (${getCapabilityModeLabel("openai-reasoning")})`)
                 .addOption("thinking-config", `Compatible (${getCapabilityModeLabel("thinking-config")})`)
                 .addOption("siliconflow-thinking", `SiliconFlow (${getCapabilityModeLabel("siliconflow-thinking")})`)
+                .addOption("zhipu-thinking", `Zhipu / GLM (${getCapabilityModeLabel("zhipu-thinking")})`)
                 .setValue(this.draft.capabilityMode)
                 .onChange((value: AICapabilityMode) => {
                     this.draft.capabilityMode = value;
@@ -1048,6 +1057,8 @@ export class SettingTab extends PluginSettingTab {
 
         const ai = this.plugin.settings.ai;
         const availableModels = getAvailableAIModels(ai);
+        const latestLog = getLatestAIDebugLog();
+        const debugLogs = getAIDebugLogs();
 
         const refresh = async () => {
             this.plugin.settings.ai = normalizeAISettings(this.plugin.settings.ai);
@@ -1392,6 +1403,69 @@ export class SettingTab extends PluginSettingTab {
             tr("Tip: if a model fails to connect, first verify the provider Base URL, API Key, and capability mode before changing prompts."),
             "warning"
         );
+
+        const diagnosticsSection = createAISection(
+            containerEl,
+            tr("AI Diagnostics"),
+            tr("Use this panel to inspect the latest in-memory AI request log when AI dictionary search, AI sentence translation, or AI card autofill appears to do nothing.")
+        );
+
+        createInfoCard(
+            diagnosticsSection,
+            latestLog
+                ? [
+                    `${tr("Latest")}: ${latestLog.phase}`,
+                    `${tr("Scenario")}: ${latestLog.scenario}`,
+                    `${tr("Provider")}: ${latestLog.providerLabel}`,
+                    `${tr("Model")}: ${latestLog.modelName}`,
+                    latestLog.status != null ? `${tr("Status")}: ${latestLog.status}` : "",
+                ].filter(Boolean).join("  •  ")
+                : tr("No AI debug log yet")
+        );
+
+        new Setting(diagnosticsSection)
+            .setName(tr("Latest diagnostic log"))
+            .setDesc(
+                latestLog
+                    ? tr("Copy the latest request and response snapshot for troubleshooting.")
+                    : tr("No AI request has been recorded in this session yet.")
+            )
+            .addButton((button) => button
+                .setButtonText(tr("Copy latest log"))
+                .setDisabled(!latestLog)
+                .onClick(async () => {
+                    await navigator.clipboard.writeText(formatAIDebugLog(getLatestAIDebugLog()));
+                    new Notice(tr("Copied to clipboard"));
+                }))
+            .addButton((button) => button
+                .setButtonText(tr("Copy all logs"))
+                .setDisabled(debugLogs.length === 0)
+                .onClick(async () => {
+                    const content = getAIDebugLogs()
+                        .map((entry) => formatAIDebugLog(entry))
+                        .join("\n\n----------------\n\n");
+                    await navigator.clipboard.writeText(content || tr("No AI debug log yet"));
+                    new Notice(tr("Copied to clipboard"));
+                }))
+            .addButton((button) => button
+                .setButtonText(tr("Clear logs"))
+                .setDisabled(debugLogs.length === 0)
+                .onClick(() => {
+                    clearAIDebugLogs();
+                    new Notice(tr("AI debug logs cleared"));
+                    this.display();
+                }))
+            .addButton((button) => button
+                .setButtonText(tr("Refresh"))
+                .onClick(() => this.display()));
+
+        const logPreview = diagnosticsSection.createEl("pre", {
+            cls: "ll-ai-debug-log-preview",
+            text: formatAIDebugLog(latestLog),
+        });
+        if (!latestLog) {
+            logPreview.addClass("is-empty");
+        }
     }
 
     // Backend server feature removed

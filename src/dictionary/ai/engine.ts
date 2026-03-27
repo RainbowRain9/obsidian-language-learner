@@ -21,10 +21,18 @@ type ChatMessage = {
 
 type ChatCompletionResponse = {
     choices?: Array<{
+        finish_reason?: string;
+        text?: string;
         message?: {
-            content?: string;
+            content?: string | Array<{ type?: string; text?: string }>;
+            reasoning_content?: string;
         };
     }>;
+    usage?: {
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
 };
 
 type AISettingsLike = {
@@ -75,6 +83,27 @@ type ResolvedRequestConfig = {
     url: string;
     headers: Record<string, string>;
     body: Record<string, unknown>;
+};
+
+type AIDebugLogEntry = {
+    id: string;
+    timestamp: string;
+    scenario: AIScenario;
+    phase: "cache-hit" | "request" | "response" | "error" | "empty-response";
+    providerId: string;
+    providerLabel: string;
+    modelId: string;
+    modelName: string;
+    modelValue: string;
+    url: string;
+    attempt?: number;
+    cacheKey?: string;
+    requestHeaders: Record<string, string>;
+    requestBody: Record<string, unknown>;
+    status?: number;
+    responseText?: string;
+    responseJson?: unknown;
+    errorMessage?: string;
 };
 
 class PersistentCache<V> {
@@ -138,6 +167,9 @@ class PersistentCache<V> {
 }
 
 const queryCache = new PersistentCache<any>("langr-ai-cache", 200);
+const AI_DEBUG_EVENT = "obsidian-langr-ai-debug";
+const AI_DEBUG_MAX_LOGS = 20;
+const DEFAULT_CARD_MAX_TOKENS = 512;
 const RESERVED_BODY_FIELDS = new Set([
     "model",
     "messages",
@@ -146,6 +178,7 @@ const RESERVED_BODY_FIELDS = new Set([
     "max_tokens",
     "stream",
 ]);
+const aiDebugLogs: AIDebugLogEntry[] = [];
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -211,7 +244,130 @@ function extractJsonObjectText(text: string): string {
 }
 
 function extractResponseContent(response: ChatCompletionResponse | null | undefined): string {
-    return response?.choices?.[0]?.message?.content?.trim?.() || "";
+    const firstChoice = response?.choices?.[0];
+    const content = firstChoice?.message?.content;
+
+    if (typeof content === "string") {
+        return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+        return content
+            .map((item) => typeof item?.text === "string" ? item.text : "")
+            .join("")
+            .trim();
+    }
+
+    if (typeof firstChoice?.text === "string") {
+        return firstChoice.text.trim();
+    }
+
+    return "";
+}
+
+function extractReasoningContent(response: ChatCompletionResponse | null | undefined): string {
+    return response?.choices?.[0]?.message?.reasoning_content?.trim?.() || "";
+}
+
+function isReasoningOnlyLengthResponse(response: ChatCompletionResponse | null | undefined): boolean {
+    const firstChoice = response?.choices?.[0];
+    const reasoningTokens = response?.usage?.completion_tokens_details?.reasoning_tokens || 0;
+    return !extractResponseContent(response)
+        && !!extractReasoningContent(response)
+        && (firstChoice?.finish_reason === "length" || reasoningTokens > 0);
+}
+
+function redactHeaderValue(key: string, value: string): string {
+    const normalizedKey = key.toLowerCase();
+    if (
+        normalizedKey.includes("authorization") ||
+        normalizedKey.includes("api-key") ||
+        normalizedKey.includes("apikey") ||
+        normalizedKey.includes("token")
+    ) {
+        return value ? "***" : "";
+    }
+    return value;
+}
+
+function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(headers).map(([key, value]) => [key, redactHeaderValue(key, value)])
+    );
+}
+
+function truncateDebugValue(value: unknown, maxLength = 2000): string | undefined {
+    if (value == null) {
+        return undefined;
+    }
+
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    if (!text) {
+        return undefined;
+    }
+
+    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function addAIDebugLog(
+    requestConfig: ResolvedRequestConfig,
+    options: RequestChatOptions,
+    payload: Partial<AIDebugLogEntry>
+): AIDebugLogEntry {
+    const entry: AIDebugLogEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: new Date().toISOString(),
+        scenario: options.scenario,
+        phase: payload.phase || "request",
+        providerId: requestConfig.provider.id,
+        providerLabel: requestConfig.provider.label || requestConfig.provider.id,
+        modelId: requestConfig.model.id,
+        modelName: requestConfig.model.name || requestConfig.model.model,
+        modelValue: requestConfig.model.model,
+        url: requestConfig.url,
+        cacheKey: options.cacheKey,
+        requestHeaders: sanitizeHeaders(requestConfig.headers),
+        requestBody: JSON.parse(JSON.stringify(requestConfig.body)),
+        ...payload,
+    };
+
+    aiDebugLogs.unshift(entry);
+    if (aiDebugLogs.length > AI_DEBUG_MAX_LOGS) {
+        aiDebugLogs.length = AI_DEBUG_MAX_LOGS;
+    }
+
+    console.info("[Language Learner][AI]", entry);
+    globalThis.dispatchEvent?.(new CustomEvent(AI_DEBUG_EVENT, { detail: entry }));
+    return entry;
+}
+
+function createEmptyContentError(scenario: AIScenario): Error {
+    const scenarioLabelMap: Record<AIScenario, string> = {
+        search: tr("AI dictionary"),
+        translate: tr("AI translation"),
+        card: tr("AI card autofill"),
+    };
+    return new Error(`${scenarioLabelMap[scenario] || tr("AI response")} ${tr("returned empty content")}`);
+}
+
+function createReasoningExhaustedError(scenario: AIScenario): Error {
+    const scenarioLabelMap: Record<AIScenario, string> = {
+        search: tr("AI dictionary"),
+        translate: tr("AI translation"),
+        card: tr("AI card autofill"),
+    };
+    return new Error(
+        `${scenarioLabelMap[scenario] || tr("AI response")} ${tr("used all output tokens on reasoning before generating final content")} ${tr("Try capability mode thinking.type or increase Max Output Tokens")}`
+    );
+}
+
+function createEmptyContentErrorForResponse(
+    scenario: AIScenario,
+    response: ChatCompletionResponse | null | undefined
+): Error {
+    return isReasoningOnlyLengthResponse(response)
+        ? createReasoningExhaustedError(scenario)
+        : createEmptyContentError(scenario);
 }
 
 function buildCacheKey(kind: string, payload: Record<string, unknown>): string {
@@ -311,6 +467,13 @@ function applyCapabilityFields(body: Record<string, unknown>, provider: AIProvid
                 body.thinking_budget = model.thinking.thinkingBudget;
             }
         }
+        return;
+    }
+
+    if (provider.capabilityMode === "zhipu-thinking") {
+        body.thinking = {
+            type: model.thinking.enabled || model.reasoning.enabled ? "enabled" : "disabled",
+        };
     }
 }
 
@@ -381,6 +544,11 @@ async function requestChatCompletion(
     if (options.cacheKey && !options.bypassCache) {
         const cached = queryCache.get(options.cacheKey);
         if (cached) {
+            addAIDebugLog(requestConfig, options, {
+                phase: "cache-hit",
+                responseJson: cached,
+                responseText: truncateDebugValue(cached),
+            });
             return cached;
         }
     }
@@ -396,6 +564,10 @@ async function requestChatCompletion(
         }
 
         try {
+            addAIDebugLog(requestConfig, options, {
+                phase: "request",
+                attempt,
+            });
             const response = await requestUrl({
                 url: requestConfig.url,
                 method: "POST",
@@ -405,6 +577,13 @@ async function requestChatCompletion(
             });
 
             if (response.status === 200) {
+                addAIDebugLog(requestConfig, options, {
+                    phase: "response",
+                    attempt,
+                    status: response.status,
+                    responseJson: response.json,
+                    responseText: truncateDebugValue(response.json),
+                });
                 if (options.cacheKey && !options.bypassCache) {
                     queryCache.set(options.cacheKey, response.json);
                 }
@@ -413,6 +592,13 @@ async function requestChatCompletion(
 
             lastStatus = response.status;
             lastText = response.text;
+            addAIDebugLog(requestConfig, options, {
+                phase: "error",
+                attempt,
+                status: response.status,
+                responseText: truncateDebugValue(response.text),
+                errorMessage: formatAIError(response.status, response.text),
+            });
 
             const shouldRetry = isRetryableStatus(response.status) && attempt < maxRetries;
             if (!shouldRetry) {
@@ -421,10 +607,24 @@ async function requestChatCompletion(
         } catch (e: any) {
             if (e.message && !e.message.includes("API")) {
                 lastText = e.message;
+                addAIDebugLog(requestConfig, options, {
+                    phase: "error",
+                    attempt,
+                    status: lastStatus ?? undefined,
+                    responseText: truncateDebugValue(lastText),
+                    errorMessage: e.message,
+                });
                 if (attempt >= maxRetries) {
                     throw new Error(`${t("Network request failed")}: ${e.message}`);
                 }
             } else {
+                addAIDebugLog(requestConfig, options, {
+                    phase: "error",
+                    attempt,
+                    status: lastStatus ?? undefined,
+                    responseText: truncateDebugValue(lastText),
+                    errorMessage: e?.message || String(e),
+                });
                 throw e;
             }
         }
@@ -478,7 +678,8 @@ function buildAutofillMessages(
         input.existingAliases?.length ? `Existing aliases: ${input.existingAliases.join(", ")}` : "",
         input.existingTags?.length ? `Existing tags: ${input.existingTags.join(", ")}` : "",
         input.existingNotes?.length ? `Existing notes: ${input.existingNotes.join(" | ")}` : "",
-        "Return only valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}.",
+        "Do not output reasoning, analysis, or markdown code fences.",
+        "Return only compact valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}.",
     ].filter(Boolean).join("\n");
 
     return [
@@ -558,7 +759,30 @@ export async function translate(text: string, settings: AISettingsLike): Promise
         temperature: 0.3,
     });
 
-    return extractResponseContent(response);
+    const content = extractResponseContent(response);
+    if (!content) {
+        const emptyContentError = createEmptyContentErrorForResponse("translate", response);
+        const requestConfig = buildRequestConfig(settings, [
+            { role: "user", content: finalPrompt },
+        ], {
+            scenario: "translate",
+            maxTokens: 150,
+            temperature: 0.3,
+        });
+        addAIDebugLog(requestConfig, {
+            scenario: "translate",
+            maxTokens: 150,
+            temperature: 0.3,
+        }, {
+            phase: "empty-response",
+            responseJson: response,
+            responseText: truncateDebugValue(response),
+            errorMessage: emptyContentError.message,
+        });
+        throw emptyContentError;
+    }
+
+    return content;
 }
 
 export async function autofillExpression(
@@ -586,7 +810,7 @@ export async function autofillExpression(
         prompt: resolved.prompt,
         temperature: resolved.model.temperature ?? 0.2,
         topP: resolved.model.topP ?? null,
-        maxOutputTokens: resolved.model.maxOutputTokens ?? 260,
+        maxOutputTokens: resolved.model.maxOutputTokens ?? DEFAULT_CARD_MAX_TOKENS,
         reasoning: resolved.model.reasoning,
         thinking: resolved.model.thinking,
         customParameters: resolved.model.customParameters,
@@ -595,13 +819,31 @@ export async function autofillExpression(
     const response = await requestChatCompletion(settings, messages, {
         scenario: "card",
         cacheKey,
-        maxTokens: 260,
+        maxTokens: DEFAULT_CARD_MAX_TOKENS,
         temperature: 0.2,
     });
 
     const content = extractResponseContent(response);
     if (!content) {
-        throw new Error(t("No response content"));
+        const emptyContentError = createEmptyContentErrorForResponse("card", response);
+        const requestConfig = buildRequestConfig(settings, messages, {
+            scenario: "card",
+            cacheKey,
+            maxTokens: DEFAULT_CARD_MAX_TOKENS,
+            temperature: 0.2,
+        });
+        addAIDebugLog(requestConfig, {
+            scenario: "card",
+            cacheKey,
+            maxTokens: DEFAULT_CARD_MAX_TOKENS,
+            temperature: 0.2,
+        }, {
+            phase: "empty-response",
+            responseJson: response,
+            responseText: truncateDebugValue(response),
+            errorMessage: emptyContentError.message,
+        });
+        throw emptyContentError;
     }
 
     return parseAutofillResponse(content);
@@ -622,9 +864,46 @@ export async function testModelConnection(
     });
 }
 
+export function getLatestAIDebugLog(): AIDebugLogEntry | null {
+    return aiDebugLogs[0] || null;
+}
+
+export function getAIDebugLogs(): AIDebugLogEntry[] {
+    return [...aiDebugLogs];
+}
+
+export function clearAIDebugLogs(): void {
+    aiDebugLogs.length = 0;
+}
+
+export function formatAIDebugLog(entry: AIDebugLogEntry | null | undefined): string {
+    if (!entry) {
+        return tr("No AI debug log yet");
+    }
+
+    const lines = [
+        `[${entry.timestamp}] ${entry.phase}`,
+        `${tr("Scenario")}: ${entry.scenario}`,
+        `${tr("Provider")}: ${entry.providerLabel} (${entry.providerId})`,
+        `${tr("Model")}: ${entry.modelName} (${entry.modelValue})`,
+        `${tr("URL")}: ${entry.url}`,
+        entry.attempt != null ? `${tr("Attempt")}: ${entry.attempt + 1}` : "",
+        entry.status != null ? `${tr("Status")}: ${entry.status}` : "",
+        entry.errorMessage ? `${tr("Error")}: ${entry.errorMessage}` : "",
+        `${tr("Request Headers")}:`,
+        JSON.stringify(entry.requestHeaders, null, 2),
+        `${tr("Request Body")}:`,
+        JSON.stringify(entry.requestBody, null, 2),
+        entry.responseText ? `${tr("Response Preview")}:\n${entry.responseText}` : "",
+    ].filter(Boolean);
+
+    return lines.join("\n");
+}
+
 export type {
     AISearchContext,
     AIAutofillInput,
     AIAutofillResult,
     ChatCompletionResponse,
+    AIDebugLogEntry,
 };

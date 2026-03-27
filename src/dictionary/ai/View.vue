@@ -17,10 +17,11 @@
 
 <script setup lang="ts">
 import { computed, ref, getCurrentInstance } from 'vue';
-import { search } from './engine';
-import { MarkdownRenderer, Component } from 'obsidian';
+import { formatAIDebugLog, getLatestAIDebugLog, search } from './engine';
+import { MarkdownRenderer, Component, Notice } from 'obsidian';
 import { useLoading } from "@dict/uses";
 import { t } from '@/lang/helper';
+const tr = (key: string) => t(key as any);
 
 const props = defineProps<{
     word: string;
@@ -54,7 +55,22 @@ async function onSearch(): Promise<boolean> {
             nativeLanguage: plugin.settings.native,
             foreignLanguage: plugin.settings.foreign,
         });
-        const rawContent = result.choices?.[0]?.message?.content || t("No response content");
+        const rawContent = result.choices?.[0]?.message?.content?.trim();
+        if (!rawContent) {
+            const latestLog = getLatestAIDebugLog();
+            error.value = `${tr("AI dictionary returned empty content")}。\n${tr("Please open AI settings and inspect the latest diagnostic log")}`;
+            console.warn("[Language Learner][AI][search] Empty response content", {
+                word: props.word,
+                sentenceText: props.sentenceText,
+                origin: props.origin,
+                latestLog,
+            });
+            if (latestLog) {
+                console.info("[Language Learner][AI][search][latest-log]\n" + formatAIDebugLog(latestLog));
+            }
+            new Notice(tr("AI dictionary returned empty content"));
+            return false;
+        }
 
         if (contentContainer.value) {
             await MarkdownRenderer.renderMarkdown(
@@ -67,7 +83,17 @@ async function onSearch(): Promise<boolean> {
         return true;
     } catch (e: any) {
         error.value = e.message || t("Error fetching AI response");
-        console.error(e);
+        const latestLog = getLatestAIDebugLog();
+        console.error("[Language Learner][AI][search] Request failed", {
+            word: props.word,
+            sentenceText: props.sentenceText,
+            origin: props.origin,
+            error: e,
+            latestLog,
+        });
+        if (latestLog) {
+            console.info("[Language Learner][AI][search][latest-log]\n" + formatAIDebugLog(latestLog));
+        }
         return false;
     }
 }
