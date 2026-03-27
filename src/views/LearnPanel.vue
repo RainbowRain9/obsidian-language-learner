@@ -4,23 +4,25 @@
 			<!-- <NThemeEditor> -->
 				<NForm :model="model" label-placement="top" label-width="auto" :rules="rules"
 				require-mark-placement="right-hanging">
-				<!-- 一个单词或短语字符串 -->
-				<NFormItem :label="t('Expression')" :label-style="labelStyle" path="expression">
-					<NInput size="small" v-model:value="model.expression" :placeholder="t('A word or a phrase')" />
-				</NFormItem>
-				<NFormItem :label="t('Surface')" :label-style="labelStyle" path="surface">
-					<NInput size="small" v-model:value="model.surface" :placeholder="t('Original selected form')" />
-				</NFormItem>
-				<!-- 单词或短语的含义(精简) -->
-				<NFormItem :label="t('Meaning')" :label-style="labelStyle" path="meaning">
-					<NInput size="small" v-model:value="model.meaning" :placeholder="t('A short definition')"
-						type="textarea" autosize />
-				</NFormItem>
-				<!-- 变形 -->
-				<NFormItem :label="t('aliases')" :label-style="labelStyle" path="aliases">
-					<NInput size="small" v-model:value="model.aliases" :placeholder="t('The inflections with , spacing')"
-						type="textarea" autosize />
-				</NFormItem>
+				<div class="learn-primary-grid">
+					<!-- 一个单词或短语字符串 -->
+					<NFormItem class="learn-primary-grid__item" :label="t('Expression')" :label-style="labelStyle" path="expression">
+						<NInput size="small" v-model:value="model.expression" :placeholder="t('A word or a phrase')" />
+					</NFormItem>
+					<NFormItem class="learn-primary-grid__item" :label="t('Surface')" :label-style="labelStyle" path="surface">
+						<NInput size="small" v-model:value="model.surface" :placeholder="t('Original selected form')" />
+					</NFormItem>
+					<!-- 单词或短语的含义(精简) -->
+					<NFormItem class="learn-primary-grid__item" :label="t('Meaning')" :label-style="labelStyle" path="meaning">
+						<NInput size="small" v-model:value="model.meaning" :placeholder="t('A short definition')"
+							type="textarea" autosize />
+					</NFormItem>
+					<!-- 变形 -->
+					<NFormItem class="learn-primary-grid__item" :label="t('aliases')" :label-style="labelStyle" path="aliases">
+						<NInput size="small" v-model:value="model.aliases" :placeholder="t('The inflections with , spacing')"
+							type="textarea" autosize />
+					</NFormItem>
+				</div>
 				<!-- 类别，可以是Word或Phrase -->
 				<NFormItem :label="t('Type')" :label-style="labelStyle" path="t">
 					<NRadioGroup v-model:value="model.t">
@@ -1138,8 +1140,8 @@ function escapeRegExp(value: string): string {
 function cleanMeaningText(text?: string | null): string {
 	return (text || "")
 		.replace(/\s+/g, " ")
-		.replace(/^[\s,，。；;:："“”"'‘’（）()【】\[\]\-]+/, "")
-		.replace(/[\s,，。；;:："“”"'‘’（）()【】\[\]\-]+$/, "")
+		.replace(/^[\s,，。；;:："“”"'‘’\-]+/, "")
+		.replace(/[\s,，。；;:："“”"'‘’\-]+$/, "")
 		.trim();
 }
 
@@ -1522,6 +1524,24 @@ watch(() => model.value, () => {
 
 	.n-input {
 		margin: 1px 0;
+	}
+
+	.learn-primary-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		column-gap: 12px;
+		align-items: start;
+	}
+
+	.learn-primary-grid__item {
+		min-width: 0;
+	}
+
+	@media (max-width: 720px) {
+		.learn-primary-grid {
+			grid-template-columns: minmax(0, 1fr);
+			column-gap: 0;
+		}
 	}
 
 	.footer-actions {
