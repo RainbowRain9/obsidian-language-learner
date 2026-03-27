@@ -4,7 +4,24 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Added
+
+- 学习面板重新加入 `AI Autofill` 按钮，并支持与 `Submit` 并排操作。
+- AI 设置页新增 `AI Autofill Settings`，可分别控制 `meaning`、`aliases`、`tags`、`notes` 的触发方式与写入策略。
+- AI 设置页新增 `AI Diagnostics`，可查看、复制和清空最近一次 AI 请求日志，便于排查 AI 词典、AI 翻译和 AI 补全问题。
+
+### Changed
+
+- AI 卡片自动填充现在按字段策略执行；每个字段都可以单独设为手动触发、自动触发或两者同时启用。
+- AI 卡片自动填充请求会只请求当前启用的字段，减少无关返回内容。
+- AI provider capability mode 新增 `Zhipu / GLM (thinking.type)`，兼容需要 `thinking.type` 请求字段的 OpenAI-compatible 接口。
+- 学习面板会在按钮下方显示当前手动 `AI Autofill` 涉及的字段，便于确认本次会补哪些内容。
+
+### Fixed
+
+- 修复 AI 词典、例句 AI 翻译和 AI 卡片补全在空响应场景下缺少可见错误线索的问题；现在会给出更明确提示并保留诊断日志。
+- 修复推理模型只输出 `reasoning_content` 且因 `finish_reason=length` 截断时，用户侧只看到“空返回”的问题；现在会提示优先检查 capability mode 或提高 `Max Output Tokens`。
+- 修复学习面板变形 / aliases 中会混入 `more`、`most` 这类通用比较级 / 最高级占位词的问题。
 
 ## [0.5.11] - 2026-03-26
 

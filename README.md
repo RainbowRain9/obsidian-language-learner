@@ -29,9 +29,12 @@
 
 - 支持 OpenAI-compatible 接口。
 - 已验证的配置方向包括 `OpenAI`、`Gemini`、`DeepSeek`、`SiliconFlow` 和自定义兼容端点。
+- 支持 `Zhipu / GLM` 这类需要 `thinking.type` 请求字段的兼容接口。
 - 支持 AI 释义、AI 翻译、卡片自动填充。
 - AI 设置支持多 provider、多 model、按场景路由和按模型连接测试。
 - 支持全局默认模型，并可分别为查词、翻译、卡片自动填充指定覆盖模型。
+- AI 卡片自动填充支持按字段分别配置 `manual / auto / manual-and-auto` 触发策略，以及 `fill-empty / merge / overwrite` 写入策略。
+- AI 设置页内置 `AI Diagnostics`，可查看、复制和清空最近一次 AI 请求日志，方便排查“没有返回内容”这类问题。
 - 支持 `Capability Mode`、`Reasoning`、`Thinking` 和结构化 `Custom Parameters` 配置。
 - 如需查看完整配置说明，可参考：[`docs/ai_settings_usage.md`](./docs/ai_settings_usage.md)
 
@@ -41,10 +44,12 @@
 - 会根据已有词条、词典结果和当前上下文预填 `expression`、`surface`、`meaning`、`status`、`type`、`aliases` 和 `sentences`；已有词条也会回填 `tags` / `notes`。
 - `expression` 会优先采用 Cambridge 词典显示的主词条，再回退到有道和词形还原结果。
 - `aliases` 会继续合并已有词条和规则推断结果，并额外从有道词典提取第三人称单数、现在分词、过去式、过去分词等基础词形。
+- 学习面板底部提供 `AI Autofill` 按钮，可与 `Submit` 配合使用；也可以在设置中改成按字段自动补全。
+- `AI Autofill` 会根据字段策略只补全你启用的内容，例如只补 `meaning` / `aliases`，或只补 `tags` / `notes`。
 - `meaning` 自动填充支持多种策略：关闭、贴近原文翻译、词典词性摘要、按上下文选择词性。
 - 阅读模式和普通划词都会尽量自动写入例句与出处。
 - 例句支持机器翻译和 AI 翻译。
-- 学习面板当前仅保留手动确认后提交，不再提供单独的 `AI Autofill` 词卡补全按钮。
+- 当 AI 返回变形时，会过滤掉 `more`、`most` 这类通用比较级/最高级占位词，避免写进无意义别名。
 - 当同一句里同时出现不同词形或同 lemma 的不同用法时，学习面板会优先保留当前点击到的 `surface`，避免旧词条把当前词面覆盖掉。
 
 ### 阅读模式
@@ -134,7 +139,8 @@ obsidian-language-learner
 - `AI & Advanced`
   - AI provider / model 管理
   - AI 路由与 prompt 配置
-  - 连接测试与高级参数
+  - AI Autofill 字段策略
+  - AI Diagnostics、连接测试与高级参数
 
 ### 界面语言
 
@@ -164,6 +170,8 @@ obsidian-language-learner
 ### 3. 生词采集
 
 - 在学习面板中确认释义、状态、标签、笔记和例句。
+- 如果启用了手动 AI 补全，`Submit` 右侧会显示 `AI Autofill` 按钮。
+- 如果某些字段设为自动补全，查词后会按当前策略静默补全这些字段。
 - 提交后会写入数据库。
 - `surface` 会参与阅读模式中的单词状态匹配与即时刷新。
 - 如果希望 `meaning` 更贴近句子原文，可以把 `Meaning Autofill` 设为 `Closest context translation`。
@@ -178,6 +186,10 @@ obsidian-language-learner
   - 句子翻译用 `Translate Model`
   - 卡片自动填充用 `Card Model`
 - 如果某个场景没有单独配置模型，插件会自动回退到 `Default Model`。
+- 如果你使用 `GLM / 智谱` 兼容接口，优先把 `Capability Mode` 设为 `Zhipu / GLM (thinking.type)`。
+- `AI Autofill Settings` 可以分别控制 `meaning`、`aliases`、`tags`、`notes` 是手动补、自动补，还是完全禁用。
+- 如果你希望 AI 接管释义，建议同时检查 `General > Meaning Autofill` 与 `AI Autofill Settings > Meaning Strategy`，避免两个自动填充策略互相抢写。
+- 如果 AI 看起来“没有反应”，先到 `AI Diagnostics` 查看 latest log，再决定是否调整 `Capability Mode`、`Thinking` 或 `Max Output Tokens`。
 - 如果你需要更细的接口兼容控制，可以继续配置：
   - `Capability Mode`
   - `Reasoning`
