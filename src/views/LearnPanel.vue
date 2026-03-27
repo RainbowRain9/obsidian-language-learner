@@ -400,6 +400,28 @@ function normalizeSurfaceValue(value?: string | null): string | undefined {
 	return normalized || undefined;
 }
 
+const GENERIC_COMPARATIVE_ALIASES = new Set(["more", "most"]);
+
+function shouldExcludeAlias(alias: string, expression: string, surface?: string): boolean {
+	if (!alias) {
+		return true;
+	}
+
+	if (alias === expression) {
+		return true;
+	}
+
+	if (
+		GENERIC_COMPARATIVE_ALIASES.has(alias) &&
+		alias !== expression &&
+		(!surface || alias !== surface)
+	) {
+		return true;
+	}
+
+	return false;
+}
+
 function escapeWordPattern(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -449,8 +471,8 @@ function normalizeAliasesValue(
 ): string[] {
 	const source = Array.isArray(value) ? value : (value || "").split(/[,，]/);
 	const merged = [...source, ...extraAliases];
-	const normalized = [...new Set(merged.map((item) => normalizeWordValue(item)).filter(Boolean))].filter(
-		(alias) => alias !== expression
+	const normalized = [...new Set(merged.map((item) => normalizeWordValue(item)).filter(Boolean))].filter((alias) =>
+		!shouldExcludeAlias(alias, expression, surface)
 	);
 
 	if (surface && surface !== expression && !normalized.includes(surface)) {
