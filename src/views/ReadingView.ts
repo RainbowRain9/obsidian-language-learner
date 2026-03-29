@@ -26,6 +26,20 @@ import {
 } from "../db/interface";
 export const READING_VIEW_TYPE: string = 'langr-reading';
 export const READING_ICON: string = 'highlight-glyph';
+const WORD_ENTRY_META_PREFIX = "<!--langr:";
+const WORD_ENTRY_META_SUFFIX = "-->";
+const WORD_ENTRY_DEVICE_ID_KEY = "langr-reading-device-id";
+
+type WordEntryMeta = {
+    source?: string;
+    updatedAt?: string;
+};
+
+type ParsedWordSectionEntry = {
+    key: string;
+    line: string;
+    meta: WordEntryMeta;
+};
 
 export class ReadingView extends TextFileView {
     plugin: LanguageLearner;
@@ -112,35 +126,90 @@ export class ReadingView extends TextFileView {
         return (expression || "").trim().toLowerCase();
     }
 
-    private formatWordEntry(entry: ExpressionInfoSimple): string {
-        return this.plugin.settings.use_fileDB
-            ? `+ **[[${entry.expression}]]** : ${entry.meaning}`
-            : `+ **${entry.expression}** : ${entry.meaning}`;
+    private getWordEntryDeviceId(): string {
+        const existing = localStorage.getItem(WORD_ENTRY_DEVICE_ID_KEY);
+        if (existing?.trim()) {
+            return existing.trim();
+        }
+
+        const generated = `device-${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem(WORD_ENTRY_DEVICE_ID_KEY, generated);
+        return generated;
     }
 
-    private parseWordSectionEntry(line: string): { key: string; line: string } | null {
+    private serializeWordEntryMeta(meta: WordEntryMeta): string {
+        const payload = {
+            source: meta.source || this.getWordEntryDeviceId(),
+            updatedAt: meta.updatedAt || new Date().toISOString(),
+        };
+        return `${WORD_ENTRY_META_PREFIX}${JSON.stringify(payload)}${WORD_ENTRY_META_SUFFIX}`;
+    }
+
+    private parseWordEntryMeta(line: string): { content: string; meta: WordEntryMeta } {
         const trimmed = line.trim();
-        if (!trimmed) {
+        const metaMatch = new RegExp(`${WORD_ENTRY_META_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(.*?)${WORD_ENTRY_META_SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).exec(trimmed);
+        if (!metaMatch) {
+            return { content: trimmed, meta: {} };
+        }
+
+        const content = trimmed.slice(0, metaMatch.index).trimEnd();
+        try {
+            return {
+                content,
+                meta: JSON.parse(metaMatch[1]) as WordEntryMeta,
+            };
+        } catch {
+            return { content: trimmed, meta: {} };
+        }
+    }
+
+    private formatWordEntry(entry: ExpressionInfoSimple, meta?: WordEntryMeta): string {
+        const content = this.plugin.settings.use_fileDB
+            ? `+ **[[${entry.expression}]]** : ${entry.meaning}`
+            : `+ **${entry.expression}** : ${entry.meaning}`;
+        return `${content} ${this.serializeWordEntryMeta(meta || {})}`;
+    }
+
+    private parseWordSectionEntry(line: string): ParsedWordSectionEntry | null {
+        const { content, meta } = this.parseWordEntryMeta(line);
+        if (!content) {
             return null;
         }
 
-        const linkedMatch = /^\+\s+\*\*\[\[([^\]]+)\]\]\*\*\s*:\s*(.+)$/.exec(trimmed);
+        const linkedMatch = /^\+\s+\*\*\[\[([^\]]+)\]\]\*\*\s*:\s*(.+)$/.exec(content);
         if (linkedMatch) {
             return {
                 key: this.normalizeWordEntryKey(linkedMatch[1]),
-                line: trimmed,
+                line: line.trim(),
+                meta,
             };
         }
 
-        const plainMatch = /^\+\s+\*\*([^*]+)\*\*\s*:\s*(.+)$/.exec(trimmed);
+        const plainMatch = /^\+\s+\*\*([^*]+)\*\*\s*:\s*(.+)$/.exec(content);
         if (plainMatch) {
             return {
                 key: this.normalizeWordEntryKey(plainMatch[1]),
-                line: trimmed,
+                line: line.trim(),
+                meta,
             };
         }
 
         return null;
+    }
+
+    private compareWordEntryMeta(a: WordEntryMeta, b: WordEntryMeta): number {
+        const aTime = a.updatedAt ? Date.parse(a.updatedAt) : Number.NaN;
+        const bTime = b.updatedAt ? Date.parse(b.updatedAt) : Number.NaN;
+
+        const safeATime = Number.isFinite(aTime) ? aTime : -1;
+        const safeBTime = Number.isFinite(bTime) ? bTime : -1;
+        if (safeATime !== safeBTime) {
+            return safeATime - safeBTime;
+        }
+
+        const aSource = a.source || "";
+        const bSource = b.source || "";
+        return aSource.localeCompare(bSource);
     }
 
     private appendWordSectionContent(
@@ -149,6 +218,7 @@ export class ReadingView extends TextFileView {
     ): string {
         const existingLines = [] as string[];
         const existingKeys = new Set<string>();
+        const existingEntries = new Map<string, ParsedWordSectionEntry>();
         existingContent.split(/\r?\n/).forEach((line) => {
             const trimmed = line.trim();
             if (!trimmed) {
@@ -157,8 +227,21 @@ export class ReadingView extends TextFileView {
 
             const parsedEntry = this.parseWordSectionEntry(trimmed);
             if (parsedEntry) {
-                existingKeys.add(parsedEntry.key);
-                existingLines.push(parsedEntry.line);
+                const previous = existingEntries.get(parsedEntry.key);
+                if (!previous) {
+                    existingEntries.set(parsedEntry.key, parsedEntry);
+                    existingKeys.add(parsedEntry.key);
+                    existingLines.push(parsedEntry.line);
+                } else if (this.compareWordEntryMeta(previous.meta, parsedEntry.meta) < 0) {
+                    existingEntries.set(parsedEntry.key, parsedEntry);
+                    const existingIndex = existingLines.findIndex((existingLine) => {
+                        const parsedExistingLine = this.parseWordSectionEntry(existingLine);
+                        return parsedExistingLine?.key === parsedEntry.key;
+                    });
+                    if (existingIndex >= 0) {
+                        existingLines[existingIndex] = parsedEntry.line;
+                    }
+                }
                 return;
             }
 
@@ -172,7 +255,10 @@ export class ReadingView extends TextFileView {
                 return;
             }
             existingKeys.add(key);
-            appendedLines.push(this.formatWordEntry(entry));
+            appendedLines.push(this.formatWordEntry(entry, {
+                source: this.getWordEntryDeviceId(),
+                updatedAt: new Date().toISOString(),
+            }));
         });
 
         return [...existingLines, ...appendedLines].join("\n");
