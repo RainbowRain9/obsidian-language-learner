@@ -790,9 +790,12 @@ export default class LanguageLearner extends Plugin {
             .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
             .replace(/\[\[([^\]]+)\]\]/g, "$1")
             .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+            .replace(/==+/g, " ")
+            .replace(/\[(?:[A-Za-z]|\d{1,3}|[A-Za-z]\d{1,3})\]/g, " ")
             .replace(/\\([\\`*_{}\[\]()#+.!|>~-])/g, "$1")
-            .replace(/[*_~#>`]/g, " ")
-            .replace(/\|/g, " ");
+            .replace(/[*_~#>`{}]/g, " ")
+            .replace(/\|/g, " ")
+            .replace(/(?<=\s)\/(?=\s)|(?<=^)\/(?=\s)|(?<=\s)\/(?=$)/g, " ");
 
         cleaned = cleaned
             .replace(/[（(]([^()（）]*[\u4e00-\u9fff][^()（）]*)[）)]/g, (_match, inner: string) => {
@@ -814,10 +817,12 @@ export default class LanguageLearner extends Plugin {
         return this.normalizeContextText(cleaned)
             .replace(/(?<=[A-Za-z])\s*(?:\.{2,}|…+)\s*(?=[A-Za-z])/g, " ")
             .replace(/[（(]\s*[）)]/g, " ")
+            .replace(/\{\s*\}/g, " ")
             .replace(/\s*[-—–:：]\s*(?=$|[.,;!?])/g, " ")
             .replace(/\s+([,.;:!?])/g, "$1")
             .replace(/([(\[{])\s+/g, "$1")
-            .replace(/\s+([)\]}])/g, "$1");
+            .replace(/\s+([)\]}])/g, "$1")
+            .replace(/(?<=^|[\s([{])\[(?:[A-Za-z]|\d{1,3}|[A-Za-z]\d{1,3})\](?=$|[\s)\]}.!?,;:])/g, " ");
     }
 
     private getActiveSelectionText(): string {
