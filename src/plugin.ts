@@ -11,6 +11,7 @@ import {
     Platform,
     moment,
     MetadataCache,
+    stringifyYaml,
 } from "obsidian";
 import { around } from "monkey-around";
 import { createApp, App as VueApp, getCurrentInstance } from "vue";
@@ -239,6 +240,10 @@ export default class LanguageLearner extends Plugin {
         this.parserAllFMDirty = true;
         this.parserAllFMCache = null;
         this.parser?.invalidateCache?.();
+    }
+
+    notifyWordStorageChanged() {
+        this.invalidateParserAllFMCache();
     }
 
     async openDB() {
@@ -1207,56 +1212,40 @@ export default class LanguageLearner extends Plugin {
     //直接生成frontmatter文本
     async createFM(cont: ExpressionInfo) {
         const formattedDate = moment.unix(cont.date).format('YYYY-MM-DD HH:mm:ss');
+        const frontmatter: Record<string, unknown> = {
+            expression: cont.expression,
+            meaning: cont.meaning ?? "",
+            date: formattedDate,
+            status: cont.status,
+            type: cont.t,
+        };
 
-        // 使用数组构建，确保每行没有前导/尾随空格
-        const lines: string[] = [];
-
-        // 开始 frontmatter
-        lines.push("---");
-        lines.push(`expression: ${cont.expression}`);
         if (cont.surface) {
-            lines.push(`surface: '${cont.surface.replace(/'/g, "''")}'`);
-        }
-        lines.push(`meaning: '${cont.meaning}'`);
-
-        // 添加 aliases（如果有）
-        if (cont.aliases && cont.aliases.length > 0) {
-            lines.push("aliases:");
-            cont.aliases.forEach(alias => lines.push(`- ${alias}`));
+            frontmatter.surface = cont.surface;
         }
 
-        // 添加基本字段
-        lines.push(`date: ${formattedDate}`);
-        lines.push(`status: ${cont.status}`);
-        lines.push(`type: ${cont.t}`);
-
-        // 添加 tags（如果有）
-        if (cont.tags && cont.tags.length > 0) {
-            lines.push("tags:");
-            cont.tags.forEach(tag => lines.push(`- ${tag}`));
+        if (cont.aliases?.length) {
+            frontmatter.aliases = cont.aliases;
         }
 
-        // 添加 notes（如果有）
-        if (cont.notes && cont.notes.length > 0) {
-            lines.push("notes:");
-            cont.notes.forEach(note => lines.push(`- '${note}'`));
+        if (cont.tags?.length) {
+            frontmatter.tags = cont.tags;
         }
 
-        // 添加句子（如果有）
-        if (cont.sentences && cont.sentences.length > 0) {
+        if (cont.notes?.length) {
+            frontmatter.notes = cont.notes;
+        }
+
+        if (cont.sentences?.length) {
             cont.sentences.forEach((sentence, index) => {
                 const i = index + 1;
-                lines.push(`sentence${i}: '${sentence.text.replace(/'/g, "''")}'`);
-                lines.push(`trans${i}: '${sentence.trans ? sentence.trans.replace(/'/g, "''") : ""}'`);
-                lines.push(`origin${i}: '${sentence.origin ? sentence.origin.replace(/'/g, "''") : ""}'`);
+                frontmatter[`sentence${i}`] = sentence.text ?? "";
+                frontmatter[`trans${i}`] = sentence.trans ?? "";
+                frontmatter[`origin${i}`] = sentence.origin ?? "";
             });
         }
 
-        // 结束 frontmatter
-        lines.push("---");
-
-        // 返回joined字符串，确保使用 \n 换行符
-        return lines.join("\n") + "\n";
+        return `---\n${stringifyYaml(frontmatter)}---\n`;
     }
 
 

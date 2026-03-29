@@ -34,6 +34,9 @@ export class ReadingView extends TextFileView {
     vueapp: VueApp;
     firstInit: boolean;
     lastPos: number;
+    private saveWordsTimer: number | null = null;
+    private saveWordsRunning = false;
+    private saveWordsQueued = false;
     //MetadataCache=new MetadataCache;
     constructor(leaf: WorkspaceLeaf, plugin: LanguageLearner) {
         super(leaf);
@@ -148,7 +151,7 @@ export class ReadingView extends TextFileView {
         let seg = this.divide(lines);
         if (!seg[type]) {
             if (create) {
-                this.plugin.app.vault.modify(this.file, oldText + `\n^^^${type}\n\n`);
+                await this.plugin.app.vault.modify(this.file, oldText + `\n^^^${type}\n\n`);
                 return "";
             }
             return null;
@@ -167,7 +170,42 @@ export class ReadingView extends TextFileView {
         let newText = lines.slice(0, seg[type].start).join("\n") +
             "\n" + content.trim() + "\n\n" +
             lines.slice(seg[type].end, lines.length).join("\n");
-        this.plugin.app.vault.modify(this.file, newText);
+        await this.plugin.app.vault.modify(this.file, newText);
+    }
+
+    scheduleSaveWords(delay = 150) {
+        if (this.saveWordsTimer !== null) {
+            window.clearTimeout(this.saveWordsTimer);
+        }
+        this.saveWordsTimer = window.setTimeout(() => {
+            this.saveWordsTimer = null;
+            void this.runSaveWords();
+        }, delay);
+    }
+
+    private async runSaveWords() {
+        if (this.saveWordsRunning) {
+            this.saveWordsQueued = true;
+            return;
+        }
+        this.saveWordsRunning = true;
+        try {
+            await this.saveWords();
+        } finally {
+            this.saveWordsRunning = false;
+            if (this.saveWordsQueued) {
+                this.saveWordsQueued = false;
+                await this.runSaveWords();
+            }
+        }
+    }
+
+    async flushSaveWords() {
+        if (this.saveWordsTimer !== null) {
+            window.clearTimeout(this.saveWordsTimer);
+            this.saveWordsTimer = null;
+        }
+        await this.runSaveWords();
     }
 
     clear(): void {
@@ -205,6 +243,7 @@ export class ReadingView extends TextFileView {
                 }
             });
             this.removeSelect();
+            this.scheduleSaveWords();
         } else if (type === "PHRASE") {
             let phraseEls = this.contentEl.querySelectorAll(".phrase");
             let isExist = false;
@@ -219,6 +258,7 @@ export class ReadingView extends TextFileView {
 
             this.removeSelect();
             if (isExist) {
+                this.scheduleSaveWords();
                 return;
             }
 
@@ -305,6 +345,7 @@ export class ReadingView extends TextFileView {
                     }
                 }
             });
+            this.scheduleSaveWords();
         }
     };
 
@@ -369,7 +410,7 @@ export class ReadingView extends TextFileView {
     async onClose() {
         removeEventListener("obsidian-langr-refresh", this.refresh);
         this.vueapp.unmount();
-        await this.saveWords();
+        await this.flushSaveWords();
     }
 
 }

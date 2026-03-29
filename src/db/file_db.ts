@@ -3,6 +3,7 @@ import {
     Platform,
     moment,
     MetadataCache,
+    TFile,
 } from "obsidian";
 import { createAutomaton, Automaton } from "ac-auto";
 import { exportDB, importInto } from "dexie-export-import";
@@ -394,11 +395,18 @@ export class FileDb extends DbProvider {
                 await app.vault.create(filePath, fm);
             } catch (err) {
                 if (err.message.includes('File already exists')) {
-                    this.plugin.app.vault.adapter.write(normalizePath(filePath), fm);
-                };
+                    const existingFile = this.plugin.app.vault.getAbstractFileByPath(filePath);
+                    if (existingFile instanceof TFile) {
+                        await this.plugin.app.vault.modify(existingFile, fm);
+                    } else {
+                        await this.plugin.app.vault.adapter.write(normalizePath(filePath), fm);
+                    }
+                } else {
+                    throw err;
+                }
             }
             if (stored) {
-                this.idb.expressions.delete(stored.id);
+                await this.idb.expressions.delete(stored.id);
             }
 
         } else {
@@ -433,11 +441,14 @@ export class FileDb extends DbProvider {
             }
             try {
                 let file = app.vault.getAbstractFileByPath(filePath);
-                await app.vault.delete(file);
+                if (file instanceof TFile) {
+                    await app.vault.delete(file);
+                }
             } catch (err) { }
 
         }
 
+        this.plugin.notifyWordStorageChanged();
         this.plugin.parser?.invalidateCache?.();
         return 200;
     }
