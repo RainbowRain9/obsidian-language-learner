@@ -168,6 +168,8 @@ export default {
     "Default Paragraphs": "每页默认段数",
     "Use Machine Translation": "使用机器翻译",
     "Auto translate sentences": "用机器翻译自动翻译例句",
+    "Auto translate example sentences": "自动翻译导入例句",
+    "Automatically translate imported example sentences": "自动为导入的例句生成翻译",
     "Open count bar": "开启单词计数条(较影响打开文章时的性能)",
     "Count the word number of different type of article": "计算文章中各种词的数目和占比",
     "Font Size": "字体大小",

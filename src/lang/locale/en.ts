@@ -171,6 +171,8 @@ export default {
     "Default Paragraphs": "Default paragraphs",
     "Use Machine Translation": "Use Machine Translation",
     "Auto translate sentences": "Auto translate sentences",
+    "Auto translate example sentences": "Auto translate example sentences",
+    "Automatically translate imported example sentences": "Automatically translate imported example sentences",
     "Open count bar": "Open count bar",
     "Count the word number of different type of article": "Count the word number of different type of article",
     "Font Size": "Font Size",

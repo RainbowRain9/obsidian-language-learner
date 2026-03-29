@@ -2267,8 +2267,8 @@ export class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName(t("Use Machine Translation"))
-            .setDesc(t("Auto translate sentences"))
+            .setName(t("Auto translate example sentences"))
+            .setDesc(t("Automatically translate imported example sentences"))
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.use_machine_trans)
                 .onChange(async (use_machine_trans) => {
