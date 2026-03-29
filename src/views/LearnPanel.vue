@@ -381,6 +381,7 @@ let submitLoading = ref(false);
 let aiAutofillLoading = ref(false);
 let aiAutofillRunId = 0;
 const aiAutofillSettingsVersion = ref(0);
+const sourceFilePath = ref<string | null>(null);
 
 type RunAIAutofillOptions = {
 	source?: "manual" | "auto";
@@ -841,15 +842,23 @@ async function submit() {
 			data.sentences = dedupeSentences(data.sentences || []);
 			// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
 
-		let statusCode = await plugin.db.postExpression(data);
-		if (statusCode !== 200) {
-			new Notice(t("Submit failed"));
-			console.warn("Submit failed, please check server status");
-			return;
-		}
+			let statusCode = await plugin.db.postExpression(data);
+			if (statusCode !== 200) {
+				new Notice(t("Submit failed"));
+				console.warn("Submit failed, please check server status");
+				return;
+			}
 
-		dispatchEvent(
-			new CustomEvent("obsidian-langr-refresh", {
+			if (sourceFilePath.value) {
+				await plugin.appendExpressionToWordsSection(sourceFilePath.value, {
+					expression: data.expression,
+					meaning: data.meaning,
+					status: data.status,
+				});
+			}
+
+			dispatchEvent(
+				new CustomEvent("obsidian-langr-refresh", {
 				detail: {
 					expression: data.expression,
 					surface: data.surface,
@@ -886,6 +895,7 @@ function clearPanel(){
 		aliases: "",
         date: Date.now(),
 	};
+	sourceFilePath.value = null;
 };
 
 const selectionToken = ref(0);
@@ -1369,6 +1379,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	const target = evt.detail.target as HTMLElement;
 	let sentenceText = sanitizeSentenceText((evt.detail.sentenceText as string) || "");
 	let defaultOrigin: string = (evt.detail.origin as string) || null;
+	sourceFilePath.value = (evt.detail.sourceFilePath as string) || null;
 
 	if (!sentenceText && target) {
 		let sentenceEl = target.parentElement?.hasClass("stns")

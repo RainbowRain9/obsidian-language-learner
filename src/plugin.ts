@@ -50,6 +50,14 @@ import { ignorableWatch } from "@vueuse/core";
 export const FRONT_MATTER_KEY: string = "langr";
 
 export var imgnum: string = localStorage.getItem('imgnum') || '';
+const WORD_ENTRY_META_PREFIX = "<!--langr:";
+const WORD_ENTRY_META_SUFFIX = "-->";
+const WORD_ENTRY_DEVICE_ID_KEY = "langr-reading-device-id";
+
+type WordSectionEntryMeta = {
+    source?: string;
+    updatedAt?: string;
+};
 
 const STATUS_KEYS = ["Ignore", "Learning", "Familiar", "Known", "Learned"] as const;
 const STATUS_ENGLISH = ["ignore", "learning", "familiar", "known", "learned"] as const;
@@ -846,6 +854,12 @@ export default class LanguageLearner extends Plugin {
         return presetOrigin ? presetOrigin : file.name;
     }
 
+    private getSearchSourceFilePath(): string | null {
+        const reading = this.app.workspace.getActiveViewOfType(ReadingView);
+        const file = reading?.file || this.app.workspace.getActiveFile();
+        return file?.path || null;
+    }
+
     private shouldSplitSentenceAt(text: string, index: number): boolean {
         const char = text[index];
         if (!/[.!?。！？]/.test(char)) {
@@ -992,7 +1006,156 @@ export default class LanguageLearner extends Plugin {
         return {
             sentenceText,
             origin: this.getSearchOrigin(),
+            sourceFilePath: this.getSearchSourceFilePath(),
         };
+    }
+
+    private normalizeWordsSectionEntryKey(expression?: string | null): string {
+        return (expression || "").trim().toLowerCase();
+    }
+
+    private getWordsSectionDeviceId(): string {
+        const existing = localStorage.getItem(WORD_ENTRY_DEVICE_ID_KEY);
+        if (existing?.trim()) {
+            return existing.trim();
+        }
+
+        const generated = `device-${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem(WORD_ENTRY_DEVICE_ID_KEY, generated);
+        return generated;
+    }
+
+    private serializeWordsSectionMeta(meta?: WordSectionEntryMeta): string {
+        const payload = {
+            source: meta?.source || this.getWordsSectionDeviceId(),
+            updatedAt: meta?.updatedAt || new Date().toISOString(),
+        };
+        return `${WORD_ENTRY_META_PREFIX}${JSON.stringify(payload)}${WORD_ENTRY_META_SUFFIX}`;
+    }
+
+    private parseWordsSectionMeta(line: string): { content: string; meta: WordSectionEntryMeta } {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            return { content: "", meta: {} };
+        }
+
+        const metaMatch = new RegExp(`${WORD_ENTRY_META_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(.*?)${WORD_ENTRY_META_SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).exec(trimmed);
+        if (!metaMatch) {
+            return { content: trimmed, meta: {} };
+        }
+
+        const content = trimmed.slice(0, metaMatch.index).trimEnd();
+        try {
+            return {
+                content,
+                meta: JSON.parse(metaMatch[1]) as WordSectionEntryMeta,
+            };
+        } catch {
+            return { content: trimmed, meta: {} };
+        }
+    }
+
+    private parseWordsSectionEntry(line: string): { key: string; line: string; meta: WordSectionEntryMeta } | null {
+        const trimmed = line.trim();
+        const { content, meta } = this.parseWordsSectionMeta(line);
+        if (!content) {
+            return null;
+        }
+
+        const linkedMatch = /^\+\s+\*\*\[\[([^\]]+)\]\]\*\*\s*:\s*(.+)$/.exec(content);
+        if (linkedMatch) {
+            return {
+                key: this.normalizeWordsSectionEntryKey(linkedMatch[1]),
+                line: trimmed,
+                meta,
+            };
+        }
+
+        const plainMatch = /^\+\s+\*\*([^*]+)\*\*\s*:\s*(.+)$/.exec(content);
+        if (plainMatch) {
+            return {
+                key: this.normalizeWordsSectionEntryKey(plainMatch[1]),
+                line: trimmed,
+                meta,
+            };
+        }
+
+        return null;
+    }
+
+    private formatWordsSectionEntry(entry: Pick<ExpressionInfo, "expression" | "meaning">, meta?: WordSectionEntryMeta): string {
+        const content = this.settings.use_fileDB
+            ? `+ **[[${entry.expression}]]** : ${entry.meaning}`
+            : `+ **${entry.expression}** : ${entry.meaning}`;
+        return `${content} ${this.serializeWordsSectionMeta(meta)}`;
+    }
+
+    private compareWordsSectionMeta(a: WordSectionEntryMeta, b: WordSectionEntryMeta): number {
+        const aTime = a.updatedAt ? Date.parse(a.updatedAt) : Number.NaN;
+        const bTime = b.updatedAt ? Date.parse(b.updatedAt) : Number.NaN;
+        const safeATime = Number.isFinite(aTime) ? aTime : -1;
+        const safeBTime = Number.isFinite(bTime) ? bTime : -1;
+        if (safeATime !== safeBTime) {
+            return safeATime - safeBTime;
+        }
+
+        return (a.source || "").localeCompare(b.source || "");
+    }
+
+    async appendExpressionToWordsSection(filePath: string, entry: Pick<ExpressionInfo, "expression" | "meaning" | "status">): Promise<void> {
+        if (!filePath || !entry?.expression || entry.status <= 0) {
+            return;
+        }
+
+        const abstractFile = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(abstractFile instanceof TFile)) {
+            return;
+        }
+
+        const originalText = await this.app.vault.read(abstractFile);
+        const lines = originalText.split("\n");
+        const wordsMarkerIndex = lines.indexOf("^^^words");
+        if (wordsMarkerIndex === -1) {
+            return;
+        }
+
+        const followingMarkers = [lines.indexOf("^^^notes"), lines.indexOf("^^^article")]
+            .filter((index) => index > wordsMarkerIndex);
+        const wordsEndIndex = followingMarkers.length > 0 ? Math.min(...followingMarkers) : lines.length;
+        const existingLines = lines.slice(wordsMarkerIndex + 1, wordsEndIndex);
+        const expressionKey = this.normalizeWordsSectionEntryKey(entry.expression);
+        const nextWordLines = [...existingLines];
+        const parsedEntries = existingLines
+            .map((line, index) => {
+                const parsed = this.parseWordsSectionEntry(line);
+                return parsed ? { ...parsed, index } : null;
+            })
+            .filter((item): item is { key: string; line: string; meta: WordSectionEntryMeta; index: number } => Boolean(item));
+        const existingEntry = parsedEntries.find((item) => item.key === expressionKey);
+        const incomingMeta: WordSectionEntryMeta = {
+            source: this.getWordsSectionDeviceId(),
+            updatedAt: new Date().toISOString(),
+        };
+        const incomingLine = this.formatWordsSectionEntry(entry, incomingMeta);
+
+        if (existingEntry) {
+            if (this.compareWordsSectionMeta(existingEntry.meta, incomingMeta) >= 0) {
+                return;
+            }
+            nextWordLines[existingEntry.index] = incomingLine;
+        } else {
+            while (nextWordLines.length > 0 && !nextWordLines[nextWordLines.length - 1].trim()) {
+                nextWordLines.pop();
+            }
+            nextWordLines.push(incomingLine, "");
+        }
+
+        const newLines = [
+            ...lines.slice(0, wordsMarkerIndex + 1),
+            ...nextWordLines,
+            ...lines.slice(wordsEndIndex),
+        ];
+        await this.app.vault.modify(abstractFile, newLines.join("\n"));
     }
 
     private async debugCopyCleanedSentence(): Promise<void> {

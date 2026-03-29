@@ -12,6 +12,7 @@ type Position = {
 type SearchContext = {
     sentenceText?: string;
     origin?: string;
+    sourceFilePath?: string;
 };
 
 //继承 GlobalEventHandlersEventMap：EventMap 继承了 GlobalEventHandlersEventMap，
@@ -23,6 +24,7 @@ interface EventMap extends GlobalEventHandlersEventMap {
         evtPosition?: Position,
         sentenceText?: string,
         origin?: string,
+        sourceFilePath?: string,
     }>;
     "obsidian-langr-refresh": CustomEvent<{
         expression: string,
