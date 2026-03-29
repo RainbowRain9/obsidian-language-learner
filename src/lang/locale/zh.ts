@@ -102,6 +102,8 @@ export default {
     "Press function key and select text to translate": "按下功能键同时划词或双击单词即可打开翻译",
     "Meaning Autofill": "释义自动填充",
     "Choose how the meaning field is auto-filled when searching": "配置查词时如何自动填写 meaning 字段",
+    "Sentence Translation Mode": "例句翻译模式",
+    "Choose the default translation mode for imported example sentences": "选择自动导入例句时默认使用机器翻译还是 AI 翻译",
     "Closest context translation": "贴近原文翻译",
     "Dictionary POS summary": "词典词性摘要",
     "Context-selected POS": "按上下文选择词性",

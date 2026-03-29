@@ -103,6 +103,8 @@ export default {
     "Press function key and select text to translate": "Press function key and select text to translate",
     "Meaning Autofill": "Meaning Autofill",
     "Choose how the meaning field is auto-filled when searching": "Choose how the meaning field is auto-filled when searching",
+    "Sentence Translation Mode": "Sentence Translation Mode",
+    "Choose the default translation mode for imported example sentences": "Choose the default translation mode for imported example sentences",
     "Closest context translation": "Closest context translation",
     "Dictionary POS summary": "Dictionary POS summary",
     "Context-selected POS": "Context-selected POS",

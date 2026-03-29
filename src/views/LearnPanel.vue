@@ -227,7 +227,8 @@ import { t } from "@/lang/helper";
 import type {
 	AIAutofillFieldKey,
 	AIAutofillWriteMode,
-	MeaningAutofillMode
+	MeaningAutofillMode,
+	SentenceTranslationMode
 } from "@/settings";
 import { useEvent } from "@/utils/use";
 import { analyzeWordSelection } from "@/utils/word-analysis";
@@ -1405,12 +1406,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 			: [],
 	};
 
-	translationTypes.value = {};
-	if (model.value.sentences && model.value.sentences.length > 0) {
-		model.value.sentences.forEach((sen: any, idx: number) => {
-			translationTypes.value[idx] = "machine";
-		});
-	}
+	initializeSentenceTranslationModes(model.value.sentences || []);
 
 	const exprPromise = plugin.db.getExpression(selection).catch((): null => null);
 	const storedSenPromise = sentenceText
@@ -1420,8 +1416,20 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		? cambridgeSearch(selection).catch((): null => null)
 		: Promise.resolve(null);
 	const formsPromise = youdaoSearch(selection).catch((): null => null);
+	const defaultSentenceTranslationMode = getDefaultSentenceTranslationMode();
 	const translationPromise = plugin.settings.use_machine_trans
-		? translateMeaningWithContext(selection, sentenceText).catch((): null => null)
+		? (
+			defaultSentenceTranslationMode === "machine"
+				? translateMeaningWithContext(selection, sentenceText).catch((): null => null)
+				: sentenceText
+					? aiTranslate(sentenceText, plugin.settings)
+						.then((translated) => ({
+							sentenceTranslation: decodeHtmlEntities(translated),
+							meaningTranslation: "",
+						}))
+						.catch((): null => null)
+					: Promise.resolve(null)
+		)
 		: Promise.resolve(null);
 	const meaningAutofillMode = plugin.settings.meaning_autofill_mode;
 
@@ -1519,7 +1527,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		if (targetSen && !targetSen.trans) {
 			targetSen.trans = res.sentenceTranslation;
 			if (!translationCache.value[sentenceText]) translationCache.value[sentenceText] = {};
-			translationCache.value[sentenceText].machine = res.sentenceTranslation;
+			translationCache.value[sentenceText][defaultSentenceTranslationMode] = res.sentenceTranslation;
 		}
 	})();
 });
@@ -1528,8 +1536,32 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 const translationTypes = ref<Record<number, 'machine' | 'ai'>>({});
 const translationCache = ref<Record<string, { machine?: string; ai?: string }>>({});
 
+function getDefaultSentenceTranslationMode(): SentenceTranslationMode {
+	return plugin.settings.sentence_translation_mode || "machine";
+}
+
+function initializeSentenceTranslationModes(sentences: Sentence[] = []) {
+	const defaultMode = getDefaultSentenceTranslationMode();
+	translationTypes.value = {};
+	sentences.forEach((_, idx) => {
+		translationTypes.value[idx] = defaultMode;
+	});
+}
+
 function getTranslationModeShortLabel(mode: "machine" | "ai" | undefined) {
 	return mode === "ai" ? "AI" : t("Machine translation short");
+}
+
+async function translateSentenceByMode(
+	mode: "machine" | "ai",
+	sentence: string
+): Promise<string> {
+	if (mode === "ai") {
+		return decodeHtmlEntities(await aiTranslate(sentence, plugin.settings));
+	}
+
+	const res = await googleTranslate(sentence, plugin.settings);
+	return decodeHtmlEntities(extractGoogleTranslation(res));
 }
 
 const toggleTrans = async (index: number, element: any) => {
@@ -1551,15 +1583,7 @@ const toggleTrans = async (index: number, element: any) => {
 
     // 2. 执行翻译
     try {
-        let result = "";
-        if (newType === 'ai') {
-            result = await aiTranslate(sentence, plugin.settings);
-        } else {
-            // 调用机器翻译逻辑
-             let res = await googleTranslate(sentence, plugin.settings);
-             result = extractGoogleTranslation(res);
-        }
-        result = decodeHtmlEntities(result);
+        const result = await translateSentenceByMode(newType, sentence);
 
         if (!result) {
             const message = newType === "ai"
@@ -1601,7 +1625,7 @@ const toggleTrans = async (index: number, element: any) => {
 watch(() => model.value, () => {
 	normalizeCurrentModelSentences();
 	model.value.notes = ensureEditableNotes(model.value.notes || []);
-    translationTypes.value = {};
+	initializeSentenceTranslationModes(model.value.sentences || []);
 }, { immediate: true });
 
 </script>

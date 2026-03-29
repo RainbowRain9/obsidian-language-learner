@@ -46,6 +46,8 @@ export type MeaningAutofillMode =
     | "youdao-basic"
     | "context-pos";
 
+export type SentenceTranslationMode = "machine" | "ai";
+
 export type AIAutofillTriggerMode =
     | "off"
     | "manual"
@@ -102,6 +104,7 @@ export interface MyPluginSettings {
     font_family: string;
     line_height: string;
     use_machine_trans: boolean;
+    sentence_translation_mode: SentenceTranslationMode;
     hover_definition_enabled: boolean;
     hover_definition_lang: string;
     // indexed db
@@ -176,6 +179,7 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     font_family: '"Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif',  // 现代字体
     line_height: "1.8em",  // 行高 1.8（舒适阅读）
     use_machine_trans: true,  // ✅ 启用机器翻译
+    sentence_translation_mode: "machine",
     word_count: true,  // ✅ 显示单词计数
     hover_definition_enabled: true,
     hover_definition_lang: "zh",
@@ -199,6 +203,10 @@ function isAIAutofillTriggerMode(value: unknown): value is AIAutofillTriggerMode
 
 function isAIAutofillWriteMode(value: unknown): value is AIAutofillWriteMode {
     return value === "fill-empty" || value === "merge" || value === "overwrite";
+}
+
+function isSentenceTranslationMode(value: unknown): value is SentenceTranslationMode {
+    return value === "machine" || value === "ai";
 }
 
 function getLegacyAIAutofillWriteMode(
@@ -297,6 +305,9 @@ export function normalizeSettings(data: unknown): MyPluginSettings {
             ...defaults.dictionaries,
             ...dictionaries,
         },
+        sentence_translation_mode: isSentenceTranslationMode(source.sentence_translation_mode)
+            ? source.sentence_translation_mode
+            : defaults.sentence_translation_mode,
         ai: normalizeAISettings(source.ai),
         ai_autofill: normalizeAIAutofillSettings(source.ai_autofill),
         activeTab: typeof source.activeTab === "string" ? source.activeTab : defaults.activeTab,
@@ -1831,6 +1842,19 @@ export class SettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.meaning_autofill_mode)
                 .onChange(async (value: MeaningAutofillMode) => {
                     this.plugin.settings.meaning_autofill_mode = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName(t("Sentence Translation Mode"))
+            .setDesc(t("Choose the default translation mode for imported example sentences"))
+            .addDropdown(dropdown => dropdown
+                .addOption("machine", t("Machine translation mode"))
+                .addOption("ai", t("AI translation mode"))
+                .setValue(this.plugin.settings.sentence_translation_mode)
+                .onChange(async (value: SentenceTranslationMode) => {
+                    this.plugin.settings.sentence_translation_mode = value;
                     await this.plugin.saveSettings();
                 })
             );
