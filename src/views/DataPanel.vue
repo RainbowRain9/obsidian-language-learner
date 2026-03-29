@@ -249,32 +249,16 @@ let columns = computed<DataTableColumns<Row>>(() => [
         justify-content: center;
     }
 
-    .data-more {
-        h2 {
-            margin: 0.5em 0;
+    .word-more {
+        padding: 6px 2px;
+
+        .word-notes .word-note-card {
+            background: var(--background-primary);
         }
 
-        .data-notes {
-            p {
-                white-space: pre-line;
-                margin: 0.5em 5px;
-            }
-        }
-
-        .data-sens {
-            .data-sen {
-                margin-bottom: 5px;
-                border: 1px solid gray;
-                border-radius: 5px;
-
-                p {
-                    &:first-child {
-                        font-style: italic;
-                    }
-
-                    margin: 0.5em 5px;
-                }
-            }
+        .word-sens .word-sen {
+            background: var(--background-primary);
+            border-color: var(--background-modifier-border);
         }
     }
 }

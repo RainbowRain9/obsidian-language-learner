@@ -2,7 +2,16 @@
     <div class="word-more">
         <div class="word-notes" v-if="(notes.length > 0)">
             <h2>{{ t("Notes") }}:</h2>
-            <p v-for="n in notes">{{ n }}</p>
+            <ul class="word-notes-list">
+                <li
+                    class="word-note-card"
+                    v-for="(note, index) in notes"
+                    :key="`${props.word}-note-${index}`"
+                >
+                    <span class="word-note-index">{{ index + 1 }}</span>
+                    <p>{{ note }}</p>
+                </li>
+            </ul>
         </div>
         <div class="word-sens" v-if="(sentences.length > 0)">
             <h2>{{ t("Sentences") }}:</h2>
@@ -51,9 +60,45 @@ function highlight(text: string, word: string) {
     .word-notes {
         user-select: text;
 
+        .word-notes-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .word-note-card {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 10px 12px;
+            border: 1px solid var(--background-modifier-border);
+            border-radius: 10px;
+            background: var(--background-secondary);
+            box-shadow: var(--shadow-s);
+        }
+
+        .word-note-index {
+            flex: 0 0 auto;
+            min-width: 22px;
+            height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-on-accent);
+            background: var(--interactive-accent);
+        }
+
         p {
             white-space: pre-line;
-            margin: 0.5em 5px;
+            margin: 0;
+            line-height: 1.6;
+            flex: 1;
         }
     }
 
