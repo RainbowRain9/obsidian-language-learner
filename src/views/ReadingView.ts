@@ -108,22 +108,89 @@ export class ReadingView extends TextFileView {
         return words
     }
 
+    private normalizeWordEntryKey(expression?: string | null): string {
+        return (expression || "").trim().toLowerCase();
+    }
+
+    private formatWordEntry(entry: ExpressionInfoSimple): string {
+        return this.plugin.settings.use_fileDB
+            ? `+ **[[${entry.expression}]]** : ${entry.meaning}`
+            : `+ **${entry.expression}** : ${entry.meaning}`;
+    }
+
+    private parseWordSectionEntry(line: string): { key: string; line: string } | null {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            return null;
+        }
+
+        const linkedMatch = /^\+\s+\*\*\[\[([^\]]+)\]\]\*\*\s*:\s*(.+)$/.exec(trimmed);
+        if (linkedMatch) {
+            return {
+                key: this.normalizeWordEntryKey(linkedMatch[1]),
+                line: trimmed,
+            };
+        }
+
+        const plainMatch = /^\+\s+\*\*([^*]+)\*\*\s*:\s*(.+)$/.exec(trimmed);
+        if (plainMatch) {
+            return {
+                key: this.normalizeWordEntryKey(plainMatch[1]),
+                line: trimmed,
+            };
+        }
+
+        return null;
+    }
+
+    private mergeWordSectionContent(
+        generatedEntries: ExpressionInfoSimple[],
+        existingContent: string
+    ): string {
+        const mergedLines = [] as string[];
+        const generatedKeys = new Set<string>();
+
+        generatedEntries.forEach((entry) => {
+            const key = this.normalizeWordEntryKey(entry.expression);
+            if (!key || generatedKeys.has(key)) {
+                return;
+            }
+            generatedKeys.add(key);
+            mergedLines.push(this.formatWordEntry(entry));
+        });
+
+        const preservedEntryLines = [] as string[];
+        const preservedOtherLines = [] as string[];
+        existingContent.split(/\r?\n/).forEach((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                return;
+            }
+
+            const parsedEntry = this.parseWordSectionEntry(trimmed);
+            if (parsedEntry) {
+                if (!generatedKeys.has(parsedEntry.key)) {
+                    generatedKeys.add(parsedEntry.key);
+                    preservedEntryLines.push(parsedEntry.line);
+                }
+                return;
+            }
+
+            preservedOtherLines.push(trimmed);
+        });
+
+        return [...mergedLines, ...preservedEntryLines, ...preservedOtherLines].join("\n");
+    }
+
     //将获取到的单词和短语列表格式化为 Markdown 格式，并写入名为 "words" 的内容中
     async saveWords() {
-        if ((await this.readContent("words")) === null) {
+        const existingWordsContent = await this.readContent("words");
+        if (existingWordsContent === null) {
             return;
         }
         let data = await this.readContent("article");
-        if (this.plugin.settings.use_fileDB) {
-            var exprs = (await this.plugin.parser.getWordsPhrases(data))
-                .map(w => `+ **[[${w.expression}]]** : ${w.meaning}`)
-                .join("\n") + "\n\n";
-        } else {
-            var exprs = (await this.plugin.parser.getWordsPhrases(data))
-                .map(w => `+ **${w.expression}** : ${w.meaning}`)
-                .join("\n") + "\n\n";
-
-        }
+        const entries = await this.plugin.parser.getWordsPhrases(data);
+        const exprs = this.mergeWordSectionContent(entries, existingWordsContent);
         await this.writeContent("words", exprs);
     }
 
