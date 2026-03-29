@@ -45,16 +45,47 @@
 						@search="tagSearch"></NSelect>
 				</NFormItem>
 				<!-- 可选,可以记多条笔记 -->
-				<NFormItem :label="t('Notes')" :label-style="labelStyle" path="tags">
-					<NDynamicInput v-model:value="model.notes" :create-button-props="{ size: 'small' }">
-						<template #create-button-default>
+				<NFormItem :label="t('Notes')" :label-style="labelStyle" path="notes">
+					<div class="learn-notes-list">
+						<div
+							v-for="(note, index) in model.notes"
+							:key="`note-${index}`"
+							class="learn-notes-item"
+							:data-note-index="index"
+						>
+							<NInput
+								size="small"
+								type="textarea"
+								:placeholder="t('Write a new note')"
+								:autosize="{ minRows: 1, maxRows: 3 }"
+								v-model:value="model.notes[index]"
+								@keydown="handleNoteKeydown($event, index)"
+							/>
+							<div class="learn-notes-actions">
+								<div
+									class="action-btn delete-btn"
+									@click="removeNote(index)"
+								>
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+								</div>
+								<div
+									class="action-btn add-btn"
+									@click="insertNote(index + 1)"
+								>
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+								</div>
+							</div>
+						</div>
+						<NButton
+							v-if="model.notes.length === 0"
+							size="small"
+							dashed
+							style="width: 100%"
+							@click="insertNote()"
+						>
 							{{ t("Create") }}
-						</template>
-						<template #="{ index, value }">
-							<NInput size="small" type="textarea" :placeholder="t('Write a new note')"
-								v-model:value="model.notes[index]" />
-						</template>
-					</NDynamicInput>
+						</NButton>
+					</div>
 				</NFormItem>
 				<!-- 可选,例句也可以记多条 -->
 				<div style="margin-bottom: 8px">
@@ -172,6 +203,7 @@ import {
 	getCurrentInstance,
 	computed,
 	CSSProperties,
+	nextTick,
     watch,
 } from "vue";
 import {
@@ -182,7 +214,6 @@ import {
 	NRadioButton,
 	NRadioGroup,
 	NButton,
-	NDynamicInput,
 	NSelect,
 	SelectOption,
 	NConfigProvider,
@@ -257,7 +288,7 @@ let model = ref<any>({
 	status: 0,
 	t: "WORD",
 	tags: [],
-	notes: [],
+	notes: [""],
 	sentences: [],
 	aliases: "",
     date: Date.now(),
@@ -303,6 +334,10 @@ function onCreateSentence() {
 		trans: "",
 		origin: "",
 	};
+}
+
+function onCreateNote() {
+	return "";
 }
 
 // 单词状态样式
@@ -513,6 +548,56 @@ function mergeUniqueTextList(existing: string[] = [], incoming: string[] = []): 
 	return merged;
 }
 
+function normalizeNotesValue(value: string[] | string | null | undefined): string[] {
+	if (Array.isArray(value)) {
+		return mergeUniqueTextList(value);
+	}
+
+	if (typeof value === "string") {
+		return mergeUniqueTextList(value.split(/\r?\n+/));
+	}
+
+	return [];
+}
+
+function ensureEditableNotes(value: string[] | string | null | undefined): string[] {
+	const normalized = normalizeNotesValue(value);
+	return normalized.length > 0 ? normalized : [onCreateNote()];
+}
+
+async function focusNoteInput(index: number) {
+	await nextTick();
+	const textarea = document.querySelector(
+		`#langr-learn-panel .learn-notes-item[data-note-index="${index}"] textarea`
+	) as HTMLTextAreaElement | null;
+	textarea?.focus();
+}
+
+async function insertNote(index?: number) {
+	const nextNotes = [...normalizeNotesValue(model.value.notes || [])];
+	const insertAt = typeof index === "number" ? Math.max(0, Math.min(index, nextNotes.length)) : nextNotes.length;
+	nextNotes.splice(insertAt, 0, onCreateNote());
+	model.value.notes = nextNotes;
+	await focusNoteInput(insertAt);
+}
+
+function removeNote(index: number) {
+	const nextNotes = [...(model.value.notes || [])];
+	nextNotes.splice(index, 1);
+	model.value.notes = nextNotes.length > 0 ? nextNotes : [onCreateNote()];
+}
+
+function handleNoteKeydown(event: KeyboardEvent, index: number) {
+	if (event.key !== "Enter" || event.shiftKey) {
+		return;
+	}
+
+	if (event.ctrlKey || event.metaKey || (!event.altKey && !event.ctrlKey && !event.metaKey)) {
+		event.preventDefault();
+		void insertNote(index + 1);
+	}
+}
+
 function aliasesInputToList(value: string[] | string | null | undefined): string[] {
 	return normalizeAliasesValue(
 		value,
@@ -695,7 +780,7 @@ async function runAIAutofill(options: RunAIAutofillOptions = {}) {
 		model.value.meaning = nextMeaning;
 		model.value.aliases = nextAliases;
 		model.value.tags = nextTags;
-		model.value.notes = nextNotes;
+		model.value.notes = ensureEditableNotes(nextNotes);
 
 		if (!silent) {
 			new Notice(t(changed ? "AI autofill applied" : "AI autofill made no changes"));
@@ -743,16 +828,17 @@ async function submit() {
 	}
 	submitLoading.value = true;
 	try {
-		let data = JSON.parse(JSON.stringify(model.value));
-		data.expression = normalizeWordValue(data.expression);
-		data.surface = normalizeSurfaceValue(data.surface);
-		data.aliases = normalizeAliasesValue(
-			data.aliases,
-			data.expression,
-			data.surface
-		);
-		data.sentences = dedupeSentences(data.sentences || []);
-		// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
+			let data = JSON.parse(JSON.stringify(model.value));
+			data.expression = normalizeWordValue(data.expression);
+			data.surface = normalizeSurfaceValue(data.surface);
+			data.aliases = normalizeAliasesValue(
+				data.aliases,
+				data.expression,
+				data.surface
+			);
+			data.notes = normalizeNotesValue(data.notes);
+			data.sentences = dedupeSentences(data.sentences || []);
+			// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
 
 		let statusCode = await plugin.db.postExpression(data);
 		if (statusCode !== 200) {
@@ -794,7 +880,7 @@ function clearPanel(){
 		status: 1,
 		t: "WORD",
 		tags: [],
-		notes: [],
+		notes: [""],
 		sentences: [],
 		aliases: "",
         date: Date.now(),
@@ -1260,15 +1346,16 @@ function mergeExpressionWithContext(
 		}
 	}
 
-	model.value = {
-		...currentModel,
-		...expr,
-		// Keep the current clicked form as the active surface for this context.
-		surface: currentModel.surface || expr.surface || "",
-		meaning: expr.meaning || currentModel.meaning || "",
-		sentences: dedupeSentences([...(currentModel.sentences || []), ...nextSentences]),
-		aliases: expr.aliases?.length ? expr.aliases.join(",") : currentModel.aliases || "",
-	};
+		model.value = {
+			...currentModel,
+			...expr,
+			// Keep the current clicked form as the active surface for this context.
+			surface: currentModel.surface || expr.surface || "",
+			meaning: expr.meaning || currentModel.meaning || "",
+			notes: ensureEditableNotes(expr.notes || currentModel.notes || []),
+			sentences: dedupeSentences([...(currentModel.sentences || []), ...nextSentences]),
+			aliases: expr.aliases?.length ? expr.aliases.join(",") : currentModel.aliases || "",
+		};
 }
 
 // 查询词汇时自动填充新词表单
@@ -1304,7 +1391,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		status: 1,
 		t: exprType,
 		tags: [],
-		notes: [],
+		notes: [""],
 		aliases: "",
 		date: Date.now(),
 		sentences: sentenceText
@@ -1513,6 +1600,7 @@ const toggleTrans = async (index: number, element: any) => {
 // 监听单词变化，重置状态
 watch(() => model.value, () => {
 	normalizeCurrentModelSentences();
+	model.value.notes = ensureEditableNotes(model.value.notes || []);
     translationTypes.value = {};
 }, { immediate: true });
 
@@ -1576,6 +1664,30 @@ watch(() => model.value, () => {
 		line-height: 1.4;
 		color: var(--text-muted);
 		text-align: right;
+	}
+
+	.learn-notes-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		width: 100%;
+	}
+
+	.learn-notes-item {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+	}
+
+	.learn-notes-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		align-items: center;
+		border: 1px solid var(--background-modifier-border);
+		border-radius: 6px;
+		overflow: hidden;
+		background: var(--background-primary);
 	}
 
     /* 隐藏默认的按钮组（如果还有残留） */
