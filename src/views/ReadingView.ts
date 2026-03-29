@@ -143,24 +143,12 @@ export class ReadingView extends TextFileView {
         return null;
     }
 
-    private mergeWordSectionContent(
+    private appendWordSectionContent(
         generatedEntries: ExpressionInfoSimple[],
         existingContent: string
     ): string {
-        const mergedLines = [] as string[];
-        const generatedKeys = new Set<string>();
-
-        generatedEntries.forEach((entry) => {
-            const key = this.normalizeWordEntryKey(entry.expression);
-            if (!key || generatedKeys.has(key)) {
-                return;
-            }
-            generatedKeys.add(key);
-            mergedLines.push(this.formatWordEntry(entry));
-        });
-
-        const preservedEntryLines = [] as string[];
-        const preservedOtherLines = [] as string[];
+        const existingLines = [] as string[];
+        const existingKeys = new Set<string>();
         existingContent.split(/\r?\n/).forEach((line) => {
             const trimmed = line.trim();
             if (!trimmed) {
@@ -169,17 +157,25 @@ export class ReadingView extends TextFileView {
 
             const parsedEntry = this.parseWordSectionEntry(trimmed);
             if (parsedEntry) {
-                if (!generatedKeys.has(parsedEntry.key)) {
-                    generatedKeys.add(parsedEntry.key);
-                    preservedEntryLines.push(parsedEntry.line);
-                }
+                existingKeys.add(parsedEntry.key);
+                existingLines.push(parsedEntry.line);
                 return;
             }
 
-            preservedOtherLines.push(trimmed);
+            existingLines.push(trimmed);
         });
 
-        return [...mergedLines, ...preservedEntryLines, ...preservedOtherLines].join("\n");
+        const appendedLines = [] as string[];
+        generatedEntries.forEach((entry) => {
+            const key = this.normalizeWordEntryKey(entry.expression);
+            if (!key || existingKeys.has(key)) {
+                return;
+            }
+            existingKeys.add(key);
+            appendedLines.push(this.formatWordEntry(entry));
+        });
+
+        return [...existingLines, ...appendedLines].join("\n");
     }
 
     //将获取到的单词和短语列表格式化为 Markdown 格式，并写入名为 "words" 的内容中
@@ -190,7 +186,7 @@ export class ReadingView extends TextFileView {
         }
         let data = await this.readContent("article");
         const entries = await this.plugin.parser.getWordsPhrases(data);
-        const exprs = this.mergeWordSectionContent(entries, existingWordsContent);
+        const exprs = this.appendWordSectionContent(entries, existingWordsContent);
         await this.writeContent("words", exprs);
     }
 
