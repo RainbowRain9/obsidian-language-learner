@@ -193,6 +193,7 @@ export default class LanguageLearner extends Plugin {
         this.registerContextMenu();
         this.registerLeftClick();
         this.registerMouseup();
+        this.registerCtrlBoldSearch();
         this.registerWordFolderWatchers();
         this.registerEvent(
             this.app.workspace.on("css-change", () => {
@@ -989,6 +990,18 @@ export default class LanguageLearner extends Plugin {
         return this.extractSentenceFromText(lines.join(" "), selection);
     }
 
+    private createSearchContextFromSentence(sentenceText: string): SearchContext {
+        if (!sentenceText) {
+            return {};
+        }
+
+        return {
+            sentenceText,
+            origin: this.getSearchOrigin(),
+            sourceFilePath: this.getSearchSourceFilePath(),
+        };
+    }
+
     private buildSearchContext(selection: string, target?: HTMLElement): SearchContext {
         const normalizedSelection = this.sanitizeSentenceContext(selection);
         if (!normalizedSelection) {
@@ -1007,6 +1020,67 @@ export default class LanguageLearner extends Plugin {
             sentenceText,
             origin: this.getSearchOrigin(),
             sourceFilePath: this.getSearchSourceFilePath(),
+        };
+    }
+
+    private getCtrlBoldSearchRequest(target?: HTMLElement | null): {
+        word: string;
+        target?: HTMLElement;
+        searchContext: SearchContext;
+    } | null {
+        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!markdownView) {
+            return null;
+        }
+
+        if (markdownView.getMode() === "source") {
+            if (!target?.matchParent?.(".markdown-source-view")) {
+                return null;
+            }
+
+            const editor = markdownView.editor;
+            const selectedText = this.sanitizeSentenceContext(editor?.getSelection() || "");
+            if (selectedText) {
+                return {
+                    word: selectedText,
+                    searchContext: this.createSearchContextFromSentence(
+                        this.getSentenceFromEditorSelection(selectedText)
+                    ),
+                };
+            }
+
+            const cursor = editor?.getCursor("from");
+            const wordRange = cursor ? editor.wordAt(cursor) : null;
+            const currentWord = wordRange
+                ? this.sanitizeSentenceContext(editor.getRange(wordRange.from, wordRange.to))
+                : "";
+            if (!currentWord) {
+                return null;
+            }
+
+            return {
+                word: currentWord,
+                searchContext: this.createSearchContextFromSentence(
+                    this.extractSentenceFromText(editor.getLine(wordRange.from.line), currentWord)
+                ),
+            };
+        }
+
+        if (!target?.matchParent?.(".markdown-preview-view")) {
+            return null;
+        }
+
+        const selectedText = this.sanitizeSentenceContext(window.getSelection()?.toString());
+        if (!selectedText) {
+            return null;
+        }
+
+        return {
+            word: selectedText,
+            target,
+            searchContext: this.createSearchContextFromSentence(
+                this.getSentenceFromDomSelection(selectedText, target)
+            ),
         };
     }
 
@@ -1188,10 +1262,18 @@ export default class LanguageLearner extends Plugin {
         }
     }
 
-    async queryWord(word: string, target?: HTMLElement, evtPosition?: Position): Promise<void> {
+    async queryWord(
+        word: string,
+        target?: HTMLElement,
+        evtPosition?: Position,
+        searchContextOverride?: SearchContext
+    ): Promise<void> {
         const normalizedWord = this.sanitizeSentenceContext(word);
         if (!normalizedWord) return;
-        const searchContext = this.buildSearchContext(normalizedWord, target);
+        const searchContext =
+            searchContextOverride && Object.keys(searchContextOverride).length > 0
+                ? searchContextOverride
+                : this.buildSearchContext(normalizedWord, target);
 
         if (!this.settings.popup_search) {
             await this.activateView(SEARCH_PANEL_VIEW, "left");
@@ -1271,6 +1353,34 @@ export default class LanguageLearner extends Plugin {
                 this.queryWord(selection, target, { x: evt.pageX, y: evt.pageY });
                 return;
             }
+        });
+    }
+
+    registerCtrlBoldSearch() {
+        this.registerDomEvent(document, "keydown", (evt) => {
+            if (!this.settings.search_word_on_ctrl_bold) {
+                return;
+            }
+            if (evt.defaultPrevented || evt.repeat || evt.isComposing || evt.altKey) {
+                return;
+            }
+            if (!(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.key.toLowerCase() !== "b") {
+                return;
+            }
+
+            const request = this.getCtrlBoldSearchRequest(evt.target as HTMLElement | null);
+            if (!request) {
+                return;
+            }
+
+            window.setTimeout(() => {
+                void this.queryWord(
+                    request.word,
+                    request.target,
+                    undefined,
+                    request.searchContext
+                );
+            }, 0);
         });
     }
 

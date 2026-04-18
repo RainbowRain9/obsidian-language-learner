@@ -101,6 +101,8 @@ export default {
     "Use a popup search panel": "Use a popup search panel",
     "Word Select": "Word Select",
     "Press function key and select text to translate": "Press function key and select text to translate",
+    "Search on Ctrl+B": "Search on Ctrl+B",
+    "When using Ctrl+B or Cmd+B, also search the current selection or the word under cursor": "When using Ctrl+B or Cmd+B, also search the current selection or the word under cursor",
     "Meaning Autofill": "Meaning Autofill",
     "Choose how the meaning field is auto-filled when searching": "Choose how the meaning field is auto-filled when searching",
     "Sentence Translation Mode": "Sentence Translation Mode",

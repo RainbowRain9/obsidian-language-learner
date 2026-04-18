@@ -100,6 +100,8 @@ export default {
     "Use a popup search panel": "使用弹出式查词面板",
     "Word Select": "划词翻译",
     "Press function key and select text to translate": "按下功能键同时划词或双击单词即可打开翻译",
+    "Search on Ctrl+B": "Ctrl+B 联动查词",
+    "When using Ctrl+B or Cmd+B, also search the current selection or the word under cursor": "使用 Ctrl+B 或 Cmd+B 加粗时，同时查询当前选区或光标所在单词",
     "Meaning Autofill": "释义自动填充",
     "Choose how the meaning field is auto-filled when searching": "配置查词时如何自动填写 meaning 字段",
     "Sentence Translation Mode": "例句翻译模式",
