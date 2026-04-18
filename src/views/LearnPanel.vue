@@ -875,27 +875,10 @@ async function submit() {
 		if (plugin.settings.auto_refresh_db) {
 			plugin.scheduleRefreshTextDB(500);
 		}
-		clearPanel();
+		new Notice(t("Submit succeeded"));
 	} finally {
 		submitLoading.value = false;
 	}
-};
-
-//清空词表单
-function clearPanel(){
-	model.value = {
-		expression: null,
-		surface: "",
-		meaning: null,
-		status: 1,
-		t: "WORD",
-		tags: [],
-		notes: [""],
-		sentences: [],
-		aliases: "",
-        date: Date.now(),
-	};
-	sourceFilePath.value = null;
 };
 
 const selectionToken = ref(0);

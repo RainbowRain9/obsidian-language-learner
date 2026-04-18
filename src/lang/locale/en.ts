@@ -234,6 +234,7 @@ export default {
     "AI autofill applied": "AI autofill applied",
     "AI autofill failed": "AI autofill failed",
     "AI autofill made no changes": "AI autofill made no changes",
+    "Submit succeeded": "Submit succeeded",
     "Submit failed": "Submit failed",
     "Translation failed": "Translation failed",
     "Searching...": "Searching...",

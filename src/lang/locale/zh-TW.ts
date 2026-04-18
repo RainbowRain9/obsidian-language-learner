@@ -193,6 +193,7 @@ export default {
     "when changing port, you should restart the server": "如果改變埠，請重啟伺服器",
     "AI Autofill": "AI 補全",
     "AI autofill applied": "AI 補全已套用",
+    "Submit succeeded": "提交成功",
     "AI autofill failed": "AI 補全失敗",
     "AI autofill made no changes": "AI 補全未帶來新內容",
     "AI autofill returned invalid JSON": "AI 補全回傳了無效的 JSON",

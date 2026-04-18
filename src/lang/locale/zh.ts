@@ -229,6 +229,7 @@ export default {
     "AI autofill applied": "AI 补全已应用",
     "AI autofill failed": "AI 补全失败",
     "AI autofill made no changes": "AI 补全未带来新内容",
+    "Submit succeeded": "提交成功",
     "Submit failed": "提交失败",
     "Translation failed": "翻译失败",
     "Searching...": "查询中...",
