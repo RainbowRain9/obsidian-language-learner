@@ -1361,13 +1361,16 @@ export default class LanguageLearner extends Plugin {
             if (!this.settings.search_word_on_ctrl_bold) {
                 return;
             }
-            if (evt.defaultPrevented || evt.repeat || evt.isComposing || evt.altKey) {
-                return;
-            }
-            if (!(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.key.toLowerCase() !== "b") {
+            const isCtrlBoldShortcut =
+                (evt.ctrlKey || evt.metaKey) &&
+                !evt.shiftKey &&
+                evt.key.toLowerCase() === "b";
+            if (!isCtrlBoldShortcut || evt.repeat || evt.isComposing || evt.altKey) {
                 return;
             }
 
+            // Obsidian/CodeMirror may mark Ctrl/Cmd+B as handled while still
+            // bubbling the event, so don't treat defaultPrevented as a blocker.
             const request = this.getCtrlBoldSearchRequest(evt.target as HTMLElement | null);
             if (!request) {
                 return;
