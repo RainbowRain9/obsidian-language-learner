@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 暂无待发布更新。
+
+## [0.6.3] - 2026-04-19
+
 ### Changed
 
 - `Translate Select` 现在会在无显式选区时自动查询当前光标所在单词，便于通过 Obsidian 自带 `Hotkeys` 绑定任意自定义快捷键查词。
