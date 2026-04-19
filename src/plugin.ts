@@ -193,7 +193,6 @@ export default class LanguageLearner extends Plugin {
         this.registerContextMenu();
         this.registerLeftClick();
         this.registerMouseup();
-        this.registerCtrlBoldSearch();
         this.registerWordFolderWatchers();
         this.registerEvent(
             this.app.workspace.on("css-change", () => {
@@ -378,8 +377,17 @@ export default class LanguageLearner extends Plugin {
             id: "langr-search-word-select",
             name: t("Translate Select"),
             callback: () => {
-                let selection = this.getActiveSelectionText();
-                this.queryWord(selection);
+                const request = this.getActiveSearchRequest();
+                if (!request) {
+                    return;
+                }
+
+                void this.queryWord(
+                    request.word,
+                    request.target,
+                    undefined,
+                    request.searchContext
+                );
             },
         });
         this.addCommand({
@@ -834,14 +842,48 @@ export default class LanguageLearner extends Plugin {
             .replace(/(?<=^|[\s([{])\[(?:[A-Za-z]|\d{1,3}|[A-Za-z]\d{1,3})\](?=$|[\s)\]}.!?,;:])/g, " ");
     }
 
-    private getActiveSelectionText(): string {
+    private getActiveSearchRequest(): {
+        word: string;
+        target?: HTMLElement;
+        searchContext: SearchContext;
+    } | null {
         const domSelection = this.sanitizeSentenceContext(window.getSelection()?.toString());
         if (domSelection) {
-            return domSelection;
+            return {
+                word: domSelection,
+                searchContext: this.createSearchContextFromSentence(
+                    this.getSentenceFromDomSelection(domSelection)
+                ),
+            };
         }
 
-        const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
-        return this.sanitizeSentenceContext(editor?.getSelection() || "");
+        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const editor = markdownView?.editor;
+        const editorSelection = this.sanitizeSentenceContext(editor?.getSelection() || "");
+        if (editorSelection) {
+            return {
+                word: editorSelection,
+                searchContext: this.createSearchContextFromSentence(
+                    this.getSentenceFromEditorSelection(editorSelection)
+                ),
+            };
+        }
+
+        const cursor = editor?.getCursor("from");
+        const wordRange = cursor ? editor.wordAt(cursor) : null;
+        const currentWord = wordRange
+            ? this.sanitizeSentenceContext(editor.getRange(wordRange.from, wordRange.to))
+            : "";
+        if (!currentWord) {
+            return null;
+        }
+
+        return {
+            word: currentWord,
+            searchContext: this.createSearchContextFromSentence(
+                this.extractSentenceFromText(editor.getLine(wordRange.from.line), currentWord)
+            ),
+        };
     }
 
     private getSearchOrigin(): string | null {
@@ -1020,67 +1062,6 @@ export default class LanguageLearner extends Plugin {
             sentenceText,
             origin: this.getSearchOrigin(),
             sourceFilePath: this.getSearchSourceFilePath(),
-        };
-    }
-
-    private getCtrlBoldSearchRequest(target?: HTMLElement | null): {
-        word: string;
-        target?: HTMLElement;
-        searchContext: SearchContext;
-    } | null {
-        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!markdownView) {
-            return null;
-        }
-
-        if (markdownView.getMode() === "source") {
-            if (!target?.matchParent?.(".markdown-source-view")) {
-                return null;
-            }
-
-            const editor = markdownView.editor;
-            const selectedText = this.sanitizeSentenceContext(editor?.getSelection() || "");
-            if (selectedText) {
-                return {
-                    word: selectedText,
-                    searchContext: this.createSearchContextFromSentence(
-                        this.getSentenceFromEditorSelection(selectedText)
-                    ),
-                };
-            }
-
-            const cursor = editor?.getCursor("from");
-            const wordRange = cursor ? editor.wordAt(cursor) : null;
-            const currentWord = wordRange
-                ? this.sanitizeSentenceContext(editor.getRange(wordRange.from, wordRange.to))
-                : "";
-            if (!currentWord) {
-                return null;
-            }
-
-            return {
-                word: currentWord,
-                searchContext: this.createSearchContextFromSentence(
-                    this.extractSentenceFromText(editor.getLine(wordRange.from.line), currentWord)
-                ),
-            };
-        }
-
-        if (!target?.matchParent?.(".markdown-preview-view")) {
-            return null;
-        }
-
-        const selectedText = this.sanitizeSentenceContext(window.getSelection()?.toString());
-        if (!selectedText) {
-            return null;
-        }
-
-        return {
-            word: selectedText,
-            target,
-            searchContext: this.createSearchContextFromSentence(
-                this.getSentenceFromDomSelection(selectedText, target)
-            ),
         };
     }
 
@@ -1353,37 +1334,6 @@ export default class LanguageLearner extends Plugin {
                 this.queryWord(selection, target, { x: evt.pageX, y: evt.pageY });
                 return;
             }
-        });
-    }
-
-    registerCtrlBoldSearch() {
-        this.registerDomEvent(document, "keydown", (evt) => {
-            if (!this.settings.search_word_on_ctrl_bold) {
-                return;
-            }
-            const isCtrlBoldShortcut =
-                (evt.ctrlKey || evt.metaKey) &&
-                !evt.shiftKey &&
-                evt.key.toLowerCase() === "b";
-            if (!isCtrlBoldShortcut || evt.repeat || evt.isComposing || evt.altKey) {
-                return;
-            }
-
-            // Obsidian/CodeMirror may mark Ctrl/Cmd+B as handled while still
-            // bubbling the event, so don't treat defaultPrevented as a blocker.
-            const request = this.getCtrlBoldSearchRequest(evt.target as HTMLElement | null);
-            if (!request) {
-                return;
-            }
-
-            window.setTimeout(() => {
-                void this.queryWord(
-                    request.word,
-                    request.target,
-                    undefined,
-                    request.searchContext
-                );
-            }, 0);
         });
     }
 

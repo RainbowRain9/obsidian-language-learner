@@ -94,8 +94,6 @@ export default {
     "Translate": "查字",
     "Word Select": "劃詞翻譯",
     "Press function key and select text to translate": "按下功能鍵同時劃詞或雙擊單字即可開啟翻譯",
-    "Search on Ctrl+B": "Ctrl+B 連動查詞",
-    "When using Ctrl+B or Cmd+B, also search the current selection or the word under cursor": "使用 Ctrl+B 或 Cmd+B 加粗時，同時查詢目前選取內容或游標所在單字",
     "Meaning Autofill": "釋義自動填充",
     "Choose how the meaning field is auto-filled when searching": "設定查字時如何自動填寫 meaning 欄位",
     "Sentence Translation Mode": "例句翻譯模式",

@@ -4,7 +4,10 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Changed
+
+- `Translate Select` 现在会在无显式选区时自动查询当前光标所在单词，便于通过 Obsidian 自带 `Hotkeys` 绑定任意自定义快捷键查词。
+- 移除插件内专用的 `Search on Ctrl+B` 设置，避免继续和编辑器原生命令型快捷键耦合。
 
 ## [0.6.2] - 2026-04-19
 

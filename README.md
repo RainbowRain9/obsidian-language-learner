@@ -159,6 +159,7 @@ obsidian-language-learner
 
 - 在预览模式或编辑模式中，按住设置里的功能键并划词。
 - 或者直接使用命令面板里的 `Translate Select` / `Translate Input`。
+- 也可以在 Obsidian 的 `Hotkeys` 中为 `Translate Select` 绑定自定义快捷键；无显式选区时，该命令会自动查询光标所在单词。
 - 如果当前上下文可识别，右侧学习面板会自动写入例句和出处。
 
 ### 2. 阅读模式

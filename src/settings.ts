@@ -94,7 +94,6 @@ export interface MyPluginSettings {
     popup_search: boolean;
     auto_pron: boolean;
     function_key: "ctrlKey" | "altKey" | "metaKey" | "disable";
-    search_word_on_ctrl_bold: boolean;
     meaning_autofill_mode: MeaningAutofillMode;
     dictionaries: { [K in string]: { enable: boolean, priority: number; } };
     dict_height: string;
@@ -155,7 +154,6 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     popup_search: true,  // ✅ 划词弹出翻译
     auto_pron: true,  // ✅ 自动发音
     function_key: "ctrlKey",  // Ctrl 键辅助选择
-    search_word_on_ctrl_bold: false,
     meaning_autofill_mode: "context-translation",
     dictionaries: {
         "youdao": { enable: true, priority: 1 },  // 有道词典（中文友好）
@@ -1829,17 +1827,6 @@ export class SettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.function_key)
                 .onChange(async (value: "ctrlKey" | "altKey" | "metaKey" | "disable") => {
                     this.plugin.settings.function_key = value;
-                    await this.plugin.saveSettings();
-                })
-            );
-
-        new Setting(containerEl)
-            .setName(t("Search on Ctrl+B"))
-            .setDesc(t("When using Ctrl+B or Cmd+B, also search the current selection or the word under cursor"))
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.search_word_on_ctrl_bold)
-                .onChange(async (value) => {
-                    this.plugin.settings.search_word_on_ctrl_bold = value;
                     await this.plugin.saveSettings();
                 })
             );
