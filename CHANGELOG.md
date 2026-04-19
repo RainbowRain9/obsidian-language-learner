@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 暂无待发布更新。
+
+## [0.6.2] - 2026-04-19
+
 ### Fixed
 
 - 修复在正常 Markdown 编辑区中，启用 `Search on Ctrl+B` 后 `Ctrl+B` / `Cmd+B` 虽然会执行原生加粗，但因事件已被 Obsidian / CodeMirror 标记为已处理而不会继续联动查词的问题。
