@@ -390,7 +390,8 @@ export class FileDb extends DbProvider {
         }
         await this.plugin.checkPath();
         if (payload.status) {
-            var fm = await this.plugin.createFM(payload);
+            const existingText = await this.plugin.readWordFileText(filePath);
+            var fm = await this.plugin.createFM(payload, existingText);
             try {
                 await app.vault.create(filePath, fm);
             } catch (err) {

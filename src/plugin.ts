@@ -32,6 +32,7 @@ import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
 import { TextParser, state } from "./views/parser";
 import { FrontMatterManager } from "./utils/frontmatter";
+import { buildWordFrontMatter, mergeWordFile } from "./utils/word-file";
 
 import { MyPluginSettings, SettingTab, normalizeSettings } from "./settings";
 import store from "./store";
@@ -1429,7 +1430,8 @@ export default class LanguageLearner extends Plugin {
                 console.warn(`[Language Learner] Skip writing word file for unresolved expression: ${str}`);
                 continue;
             }
-            var fm = await this.createFM(expressionInfo);
+            const existingText = await this.readWordFileText(filePath);
+            var fm = await this.createFM(expressionInfo, existingText);
             try {
                 await app.vault.create(filePath, fm);
             } catch (err) {
@@ -1440,43 +1442,30 @@ export default class LanguageLearner extends Plugin {
         }
     }
 
-    //直接生成frontmatter文本
-    async createFM(cont: ExpressionInfo) {
-        const formattedDate = moment.unix(cont.date).format('YYYY-MM-DD HH:mm:ss');
-        const frontmatter: Record<string, unknown> = {
-            expression: cont.expression,
-            meaning: cont.meaning ?? "",
-            date: formattedDate,
-            status: cont.status,
-            type: cont.t,
-        };
+    //读取词条文件原文；文件不存在时返回 null
+    async readWordFileText(filePath: string): Promise<string | null> {
+        const path = normalizePath(filePath);
+        try {
+            const file = this.app.vault.getAbstractFileByPath(path);
+            if (file instanceof TFile) {
+                return await this.app.vault.read(file);
+            }
+        } catch (err) { }
+        try {
+            if (await this.app.vault.adapter.exists(path)) {
+                return await this.app.vault.adapter.read(path);
+            }
+        } catch (err) { }
+        return null;
+    }
 
-        if (cont.surface) {
-            frontmatter.surface = cont.surface;
-        }
-
-        if (cont.aliases?.length) {
-            frontmatter.aliases = cont.aliases;
-        }
-
-        if (cont.tags?.length) {
-            frontmatter.tags = cont.tags;
-        }
-
-        if (cont.notes?.length) {
-            frontmatter.notes = cont.notes;
-        }
-
-        if (cont.sentences?.length) {
-            cont.sentences.forEach((sentence, index) => {
-                const i = index + 1;
-                frontmatter[`sentence${i}`] = sentence.text ?? "";
-                frontmatter[`trans${i}`] = sentence.trans ?? "";
-                frontmatter[`origin${i}`] = sentence.origin ?? "";
-            });
-        }
-
-        return `---\n${stringifyYaml(frontmatter)}---\n`;
+    //直接生成frontmatter文本；existingFileText 非空时在其基础上做保留式合并
+    async createFM(cont: ExpressionInfo, existingFileText: string | null = null): Promise<string> {
+        const frontmatter = buildWordFrontMatter(
+            cont,
+            (unix) => moment.unix(unix).format('YYYY-MM-DD HH:mm:ss'),
+        );
+        return mergeWordFile(existingFileText, frontmatter, stringifyYaml);
     }
 
 

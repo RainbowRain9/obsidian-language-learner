@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-- 暂无待发布更新。
+### Changed
+
+- 词条文件保存改为「保留式合并」：通过学习面板 Submit、阅读模式分级等路径保存词条时，不再整体重建 `word_folder` 中的词条 markdown 文件，而是以现有 frontmatter 为基底，只覆盖本插件管理的白名单键（`expression` / `meaning` / `date` / `status` / `type` / `surface` / `aliases` / `tags` / `notes` / `sentenceN` / `transN` / `originN`），其余未知键按原文保留，frontmatter 之后的正文也不再被清空。与外部工具共享词条存储（如 ScoreFlow 词卡复习回写 `复习次数` / `下次复习` / `复习记录`）时，插件保存不会再抹掉这些外部字段；新建词条文件的行为与旧版本逐字节一致。新增零依赖回归脚本 `scripts/test-merge-wordfile.mjs`（`node scripts/test-merge-wordfile.mjs`）。
 
 ## [0.6.3] - 2026-04-19
 
