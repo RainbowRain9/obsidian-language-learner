@@ -8,6 +8,11 @@
 
 - 词条文件保存改为「保留式合并」：通过学习面板 Submit、阅读模式分级等路径保存词条时，不再整体重建 `word_folder` 中的词条 markdown 文件，而是以现有 frontmatter 为基底，只覆盖本插件管理的白名单键（`expression` / `meaning` / `date` / `status` / `type` / `surface` / `aliases` / `tags` / `notes` / `sentenceN` / `transN` / `originN`），其余未知键按原文保留，frontmatter 之后的正文也不再被清空。与外部工具共享词条存储（如 ScoreFlow 词卡复习回写 `复习次数` / `下次复习` / `复习记录`）时，插件保存不会再抹掉这些外部字段；新建词条文件的行为与旧版本逐字节一致。新增零依赖回归脚本 `scripts/test-merge-wordfile.mjs`（`node scripts/test-merge-wordfile.mjs`）。
 
+### Added
+
+- 词库面板（DataPanel）在检测到外部复习工具写入的「下次复习」字段时，会在表格中新增「下次复习」列；学习面板查询到携带该字段的已有词条时，也会在状态按钮下方显示「下次复习」。
+- 统计面板新增「复习留存」图表：按日复习次数（柱）＋累计留存率（折线，百分比），数据来自词条 frontmatter 的 `复习记录` YAML 列表或正文中的复习记录表格，无任何复习记录时显示空态提示。
+
 ## [0.6.3] - 2026-04-19
 
 ### Changed

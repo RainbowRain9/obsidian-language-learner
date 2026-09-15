@@ -1,3 +1,5 @@
+import type { ReviewLogEntry } from "@/utils/word-file";
+
 interface ArticleWords {
     article: string;
     words: string[];
@@ -36,6 +38,9 @@ interface ExpressionInfo {
     sentences: Sentence[];
     aliases:string[];
     date: number;
+    // 外部复习工具（ScoreFlow 等）写入词条 frontmatter 的共享字段；可能不存在
+    next_review?: string;
+    review_log?: ReviewLogEntry[];
 }
 
 interface ExpressionInfoSimple {
@@ -48,6 +53,7 @@ interface ExpressionInfoSimple {
     sen_num: number;
     date: number;
     aliases:string[];
+    next_review?: string;
 }
 
 interface CountInfo {

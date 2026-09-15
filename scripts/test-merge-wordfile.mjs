@@ -18,7 +18,9 @@ const srcPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), ".
 const { code } = await transform(readFileSync(srcPath, "utf8"), { loader: "ts", format: "esm" });
 const tmpModule = path.join(tmpdir(), `word-file-${process.pid}-${Date.now()}.mjs`);
 writeFileSync(tmpModule, code);
-const { buildWordFrontMatter, mergeWordFile, formatUnixTimestamp } = await import(pathToFileURL(tmpModule).href);
+const { buildWordFrontMatter, mergeWordFile, formatUnixTimestamp,
+    normalizeNextReview, parseReviewLog, parseReviewLogTables, aggregateReviewStats,
+} = await import(pathToFileURL(tmpModule).href);
 
 // ---------- fixture YAML codec（js-yaml 子集行为） ----------
 const SPECIAL_LEAD = /^[-?:,[\]{}#&*!|>'"%@`\s]/;
@@ -321,6 +323,79 @@ section("T6 buildWordFrontMatter 白名单与格式化规则");
         const expect = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
         check(`formatUnixTimestamp(${unix}) 本地时间零填充`, formatUnixTimestamp(unix) === expect);
     }
+}
+
+// ---------- T7 外部复习共享字段的读取与聚合 ----------
+section("T7 下次复习 / 复习记录 解析与留存聚合");
+{
+    check("下次复习：字符串原样", normalizeNextReview("2026-09-20") === "2026-09-20");
+    check("下次复习：Date 归一为 YYYY-MM-DD",
+        normalizeNextReview(new Date(2026, 8, 20)) === "2026-09-20");
+    check("下次复习：数字转字符串", normalizeNextReview(5) === "5");
+    check("下次复习：缺失/空白容错为 undefined",
+        normalizeNextReview(undefined) === undefined && normalizeNextReview(null) === undefined
+        && normalizeNextReview("") === undefined && normalizeNextReview("   ") === undefined);
+
+    check("复习记录：非列表返回空数组",
+        parseReviewLog(undefined).length === 0 && parseReviewLog("nope").length === 0
+        && parseReviewLog(null).length === 0);
+    const log = parseReviewLog([
+        { "日期": "2026-09-01", "结果": "Good", "备注": "首刷" },
+        "2026-09-05",
+        { date: new Date(2026, 8, 7), result: "Again" },
+        { "结果": "无日期应跳过" },
+    ]);
+    check("复习记录：中/英键名、纯日期标量、Date 均可解析且无日期项跳过",
+        log.length === 3
+        && log[0].date === "2026-09-01" && log[0].result === "Good" && log[0].note === "首刷"
+        && log[1].date === "2026-09-05" && log[1].result === undefined
+        && log[2].date === "2026-09-07" && log[2].result === "Again",
+        JSON.stringify(log));
+
+    const body = `# 单词
+
+## 📎 来源
+
+| 日期 | 结果 | 备注 |
+| --- | --- | --- |
+| 2099-01-01 | 不该被解析 | 复习记录小节外的表格 |
+
+## 📈 复习记录
+
+| 日期 | 复习结果 | 备注 |
+| ---- | -------- | ---- |
+| 2026-09-01 | Good | 首刷 |
+| 2026-09-05 | Again | 忘了 |
+`;
+    const tableLog = parseReviewLogTables(body);
+    check("正文表格：只解析复习记录小节之后的表格",
+        tableLog.length === 2 && tableLog[0].date === "2026-09-01" && tableLog[0].result === "Good"
+        && tableLog[0].note === "首刷" && tableLog[1].result === "Again",
+        JSON.stringify(tableLog));
+    const enTable = parseReviewLogTables(`## Review Log\n\n| date | result |\n| --- | --- |\n| 2026-09-08 | Easy |\n`);
+    check("正文表格：英文表头兼容", enTable.length === 1 && enTable[0].result === "Easy", JSON.stringify(enTable));
+    check("正文表格：仅日期列也产出记录", parseReviewLogTables(`## 复习记录\n\n| 日期 |\n| --- |\n| 2026-09-09 |\n`).length === 1);
+    check("正文表格：无复习记录小节返回空", parseReviewLogTables(`# t\n\n| a | b |\n| - | - |\n| 1 | 2 |\n`).length === 0);
+    check("正文表格：重复表头行被跳过",
+        parseReviewLogTables(`## 复习记录\n\n| 日期 | 复习结果 |\n| - | - |\n| 日期 | 复习结果 |\n| 2026-09-10 | Good |\n`).length === 1);
+
+    const stats = aggregateReviewStats([
+        { date: "2026-09-01", result: "Good" },
+        { date: "2026-09-01", result: "Again" },
+        { date: "2026-09-01", result: "未掌握" },
+        { date: "2026-09-02 10:00", result: "🟡 初始" },
+        { date: "2026-09-03", result: "Good" },
+    ]);
+    check("聚合：按日排序归并（含带时间的日期）",
+        JSON.stringify(stats.dates) === JSON.stringify(["2026-09-01", "2026-09-02", "2026-09-03"])
+        && JSON.stringify(stats.dailyCounts) === JSON.stringify([3, 1, 1]),
+        JSON.stringify(stats));
+    check("聚合：累计留存率，未识别档位不计入分母（33.3→33.3→50）",
+        JSON.stringify(stats.cumulativeRetention) === JSON.stringify([33.3, 33.3, 50]),
+        JSON.stringify(stats.cumulativeRetention));
+    const emptyStats = aggregateReviewStats([]);
+    check("聚合：空输入返回空序列",
+        emptyStats.dates.length === 0 && emptyStats.dailyCounts.length === 0 && emptyStats.cumulativeRetention.length === 0);
 }
 
 // ---------- 汇总 ----------

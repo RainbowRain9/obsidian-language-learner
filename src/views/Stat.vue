@@ -1,12 +1,15 @@
 <template>
 	<div id="chart"></div>
+	<div id="review-chart" v-show="hasReviewData"></div>
+	<div v-if="reviewLoaded && !hasReviewData" id="review-empty">{{ t("No review records yet") }}</div>
 </template>
 
 <script setup lang="ts">
 import { moment } from "obsidian";
-import { onMounted, onUnmounted, getCurrentInstance, watch } from "vue";
+import { onMounted, onUnmounted, getCurrentInstance, ref, watch } from "vue";
 import { currentLanguageRef, t } from "@/lang/helper";
 import LanguageLearner from "@/plugin";
+import { aggregateReviewStats } from "@/utils/word-file";
 
 import * as echarts from "echarts/core";
 
@@ -17,8 +20,10 @@ import {
 	TooltipComponentOption,
 	TitleComponent,
 	TitleComponentOption,
+	LegendComponent,
+	LegendComponentOption,
 } from "echarts/components";
-import { LineChart, LineSeriesOption } from "echarts/charts";
+import { LineChart, LineSeriesOption, BarChart, BarSeriesOption } from "echarts/charts";
 import { UniversalTransition } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
 
@@ -27,8 +32,10 @@ import { CanvasRenderer } from "echarts/renderers";
 echarts.use([
 	GridComponent,
 	LineChart,
+	BarChart,
 	TooltipComponent,
 	TitleComponent,
+	LegendComponent,
 	CanvasRenderer,
 	UniversalTransition,
 ]);
@@ -36,8 +43,10 @@ echarts.use([
 type EChartsOption = echarts.ComposeOption<
 	| GridComponentOption
 	| LineSeriesOption
+	| BarSeriesOption
 	| TooltipComponentOption
 	| TitleComponentOption
+	| LegendComponentOption
 >;
 
 const plugin: LanguageLearner = getCurrentInstance().appContext.config.globalProperties.plugin;
@@ -48,6 +57,13 @@ let charDom: HTMLElement;
 let sevenDays: echarts.EChartsType;
 let option: EChartsOption;
 
+let reviewDom: HTMLElement;
+let reviewChart: echarts.EChartsType;
+let reviewOption: EChartsOption;
+// 外部复习工具写入「复习记录」前保持空态提示，不渲染空图
+let hasReviewData = ref(false);
+let reviewLoaded = ref(false);
+
 onMounted(async () => {
 	charDom = container.querySelector("#chart");
 	// setTimeout(() => {
@@ -56,9 +72,16 @@ onMounted(async () => {
 		height: 350,
 	});
 	option && sevenDays.setOption(option);
+	reviewDom = container.querySelector("#review-chart");
+	reviewChart = echarts.init(reviewDom, null, {
+		width: 400,
+		height: 350,
+	});
+	reviewOption && reviewChart.setOption(reviewOption);
 	applyChartLabels();
 	// },0)
 	updateChart();
+	updateReviewChart();
 });
 
 const last7days = [6, 5, 4, 3, 2, 1, 0].map((i) =>
@@ -121,6 +144,56 @@ option = {
 	],
 };
 
+reviewOption = {
+	title: {
+		text: t("Review Retention"),
+	},
+	tooltip: {
+		trigger: "axis",
+	},
+	legend: {
+		data: [t("Daily Reviews"), t("Cumulative Retention")],
+	},
+	xAxis: {
+		type: "category",
+		boundaryGap: true,
+		data: [],
+	},
+	yAxis: [
+		{
+			type: "value",
+			minInterval: 1,
+		},
+		{
+			type: "value",
+			min: 0,
+			max: 100,
+			axisLabel: {
+				formatter: "{value}%",
+			},
+		},
+	],
+	series: [
+		{
+			name: t("Daily Reviews"),
+			data: [],
+			type: "bar",
+			yAxisIndex: 0,
+			barMaxWidth: 24,
+		},
+		{
+			name: t("Cumulative Retention"),
+			data: [],
+			type: "line",
+			yAxisIndex: 1,
+			smooth: true,
+			emphasis: {
+				focus: "series",
+			},
+		},
+	],
+};
+
 function applyChartLabels() {
 	if (!sevenDays) {
 		return;
@@ -134,6 +207,19 @@ function applyChartLabels() {
 			{ name: t("Day Ignore") },
 			{ name: t("Day Non-Ignore") },
 			{ name: t("Accumulated") },
+		],
+	});
+
+	reviewChart?.setOption({
+		title: {
+			text: t("Review Retention"),
+		},
+		legend: {
+			data: [t("Daily Reviews"), t("Cumulative Retention")],
+		},
+		series: [
+			{ name: t("Daily Reviews") },
+			{ name: t("Cumulative Retention") },
 		],
 	});
 }
@@ -155,8 +241,35 @@ async function updateChart() {
 	});
 }
 
+async function updateReviewChart() {
+	if (!reviewChart) {
+		return;
+	}
+	const logs = await plugin.collectReviewLogs();
+	const stats = aggregateReviewStats(logs);
+	reviewLoaded.value = true;
+	hasReviewData.value = stats.dates.length > 0;
+	if (!hasReviewData.value) {
+		return;
+	}
+	reviewChart.setOption({
+		xAxis: {
+			data: stats.dates,
+		},
+		series: [
+			{ data: stats.dailyCounts },
+			{ data: stats.cumulativeRetention },
+		],
+	});
+}
+
+function refreshCharts() {
+	updateChart();
+	updateReviewChart();
+}
+
 onMounted(() => {
-	addEventListener("obsidian-langr-refresh-stat", updateChart);
+	addEventListener("obsidian-langr-refresh-stat", refreshCharts);
 });
 
 watch(() => currentLanguageRef.value, () => {
@@ -164,7 +277,19 @@ watch(() => currentLanguageRef.value, () => {
 });
 
 onUnmounted(() => {
-	removeEventListener("obsidian-langr-refresh-stat", updateChart);
+	removeEventListener("obsidian-langr-refresh-stat", refreshCharts);
 });
 
 </script>
+
+<style scoped>
+#review-empty {
+	width: 400px;
+	padding: 24px 0;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 6px;
+}
+</style>

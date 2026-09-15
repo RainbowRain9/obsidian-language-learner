@@ -281,6 +281,7 @@ export class FileDb extends DbProvider {
                     note_num: v.notes.length,
                     date: v.date,
                     aliases: v.aliases,
+                    next_review: v.next_review,
                 }
             }) as ExpressionInfoSimple[];
 
@@ -349,6 +350,7 @@ export class FileDb extends DbProvider {
                     note_num: v.notes.length,
                     date: v.date,
                     aliases: v.aliases,
+                    next_review: v.next_review,
                 }
             }) as ExpressionInfoSimple[];
         if (ignores) {

@@ -12,6 +12,7 @@ import {
     moment,
     MetadataCache,
     stringifyYaml,
+    parseYaml,
 } from "obsidian";
 import { around } from "monkey-around";
 import { createApp, App as VueApp, getCurrentInstance } from "vue";
@@ -32,7 +33,11 @@ import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
 import { TextParser, state } from "./views/parser";
 import { FrontMatterManager } from "./utils/frontmatter";
-import { buildWordFrontMatter, mergeWordFile } from "./utils/word-file";
+import {
+    buildWordFrontMatter, mergeWordFile,
+    parseReviewLog, parseReviewLogTables, splitWordFileText,
+    normalizeNextReview, type ReviewLogEntry,
+} from "./utils/word-file";
 
 import { MyPluginSettings, SettingTab, normalizeSettings } from "./settings";
 import store from "./store";
@@ -140,6 +145,7 @@ export default class LanguageLearner extends Plugin {
     private parserAllFMCache: ExpressionInfo[] | null = null;
     private parserAllFMDirty = true;
     private parserAllFMFolder = "";
+    private reviewLogsCache: ReviewLogEntry[] | null = null;
     private refreshTextDbTimer: number | null = null;
     private refreshTextDbRunning = false;
     private refreshTextDbQueued = false;
@@ -248,6 +254,7 @@ export default class LanguageLearner extends Plugin {
     private invalidateParserAllFMCache() {
         this.parserAllFMDirty = true;
         this.parserAllFMCache = null;
+        this.reviewLogsCache = null;
         this.parser?.invalidateCache?.();
     }
 
@@ -1598,6 +1605,14 @@ export default class LanguageLearner extends Plugin {
             date: moment.utc(date).unix(),
             sentences: sentences,
         }
+        const nextReview = normalizeNextReview((fm as Record<string, unknown>)["下次复习"]);
+        const reviewLog = parseReviewLog((fm as Record<string, unknown>)["复习记录"]);
+        if (nextReview !== undefined) {
+            expressioninfo.next_review = nextReview;
+        }
+        if (reviewLog.length) {
+            expressioninfo.review_log = reviewLog;
+        }
         return expressioninfo;
     }
 
@@ -1623,6 +1638,42 @@ export default class LanguageLearner extends Plugin {
         this.parserAllFMCache = wordsinfo;
         this.parserAllFMDirty = false;
         return wordsinfo;
+    }
+
+    //汇总所有词条的复习记录：frontmatter YAML 列表形态优先，缺失时解析正文表格形态；
+    //结果缓存，随 parserAllFM 缓存一起失效
+    async collectReviewLogs(): Promise<ReviewLogEntry[]> {
+        if (this.reviewLogsCache) {
+            return this.reviewLogsCache;
+        }
+        const logs: ReviewLogEntry[] = [];
+        let files: string[] = [];
+        try {
+            files = (await this.app.vault.adapter.list(normalizePath(this.settings.word_folder))).files;
+        } catch (err) {
+            this.reviewLogsCache = logs;
+            return logs;
+        }
+        for (const filepath of files) {
+            try {
+                const text = await this.app.vault.adapter.read(filepath);
+                const { fmText, body } = splitWordFileText(text);
+                let fmLog: ReviewLogEntry[] = [];
+                if (fmText !== null) {
+                    try {
+                        const fm = parseYaml(fmText) as Record<string, unknown> | null;
+                        fmLog = parseReviewLog(fm?.["复习记录"]);
+                    } catch (err) { }
+                }
+                if (fmLog.length) {
+                    logs.push(...fmLog);
+                } else {
+                    logs.push(...parseReviewLogTables(body));
+                }
+            } catch (err) { }
+        }
+        this.reviewLogsCache = logs;
+        return logs;
     }
 
 

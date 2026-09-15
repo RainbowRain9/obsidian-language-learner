@@ -520,4 +520,9 @@ export default {
     "returned empty content": "返回了空内容",
     "used all output tokens on reasoning before generating final content": "在生成最终内容前把输出 token 全耗在推理内容上了",
     "Try capability mode thinking.type or increase Max Output Tokens": "请尝试把 provider 的 capability mode 改为 thinking.type，或提高 Max Output Tokens",
+    "Next Review": "下次复习"
+    ,"Review Retention": "复习留存"
+    ,"Daily Reviews": "每日复习次数"
+    ,"Cumulative Retention": "累计留存率"
+    ,"No review records yet": "暂无复习记录"
 };

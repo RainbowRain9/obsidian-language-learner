@@ -69,7 +69,7 @@ type WordFileParts = {
     body: string;
 };
 
-function splitWordFileText(text: string): WordFileParts {
+export function splitWordFileText(text: string): WordFileParts {
     const match = text.match(FRONTMATTER_BLOCK_REGEX);
     if (!match) {
         return { bom: "", fmText: null, body: text };
@@ -183,4 +183,182 @@ export function mergeWordFile(
     return body === ""
         ? `${bom}${fmBlock}\n`
         : `${bom}${fmBlock}\n${body}`;
+}
+
+// ---------- 外部复习工具（ScoreFlow 等）共享字段的读取 ----------
+
+export type ReviewLogEntry = {
+    date: string;
+    result?: string;
+    note?: string;
+};
+
+// js-yaml 会把 "2026-09-20" 这类值解析为 Date 对象，显示层需要稳定的字符串
+function toDisplayString(value: unknown): string | undefined {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+    }
+    if (typeof value === "string" && value.trim() !== "") {
+        return value.trim();
+    }
+    if (typeof value === "number" && !isNaN(value)) {
+        return String(value);
+    }
+    return undefined;
+}
+
+// 读取「下次复习」，键不存在或值形态未知时返回 undefined（容错省略）
+export function normalizeNextReview(value: unknown): string | undefined {
+    return toDisplayString(value);
+}
+
+// 「复习记录」的 YAML 列表形态：[{日期, 结果, 备注}] 或纯日期标量列表，兼容英文键名
+export function parseReviewLog(value: unknown): ReviewLogEntry[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const entries: ReviewLogEntry[] = [];
+    for (const item of value) {
+        if (item !== null && typeof item === "object" && !(item instanceof Date)) {
+            const rec = item as Record<string, unknown>;
+            const date = toDisplayString(rec["日期"] ?? rec["date"]);
+            if (date === undefined) {
+                continue;
+            }
+            entries.push({
+                date,
+                result: toDisplayString(rec["结果"] ?? rec["result"]),
+                note: toDisplayString(rec["备注"] ?? rec["note"]),
+            });
+        } else {
+            const date = toDisplayString(item);
+            if (date !== undefined) {
+                entries.push({ date });
+            }
+        }
+    }
+    return entries;
+}
+
+// 「复习记录」的正文表格形态：只解析复习记录小节标题之后的 markdown 表格
+function reviewTableHeaderIndex(cells: string[]): { date: number; result: number; note: number } | null {
+    let date = -1, result = -1, note = -1;
+    cells.forEach((cell, i) => {
+        const key = cell.toLowerCase().replace(/\s/g, "");
+        if (date < 0 && (key === "日期" || key === "date")) {
+            date = i;
+        } else if (result < 0 && (key === "复习结果" || key === "结果" || key === "result")) {
+            result = i;
+        } else if (note < 0 && (key === "备注" || key === "note")) {
+            note = i;
+        }
+    });
+    return date >= 0 ? { date, result, note } : null;
+}
+
+export function parseReviewLogTables(body: string): ReviewLogEntry[] {
+    const entries: ReviewLogEntry[] = [];
+    let inReviewSection = false;
+    let header: { date: number; result: number; note: number } | null = null;
+
+    for (const raw of body.split("\n")) {
+        const line = raw.trim();
+        if (line === "") {
+            continue;
+        }
+        const heading = line.match(/^#{1,6}\s+(.*?)\s*#*\s*$/);
+        if (heading) {
+            inReviewSection = heading[1].includes("复习记录") || /review\s*log/i.test(heading[1]);
+            header = null;
+            continue;
+        }
+        if (!inReviewSection || !line.startsWith("|")) {
+            header = null;
+            continue;
+        }
+        const cells = line.replace(/^\|/, "").split("|").map((c) => c.trim());
+        if (cells.length > 0 && cells[cells.length - 1] === "") {
+            cells.pop();
+        }
+        // 表头下方的分隔行（| - | 或 | --- |，可带对齐冒号）
+        if (cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c))) {
+            continue;
+        }
+        if (!header) {
+            header = reviewTableHeaderIndex(cells);
+            continue;
+        }
+        const date = cells[header.date];
+        if (!date || date === "日期" || date.toLowerCase() === "date") {
+            continue;
+        }
+        entries.push({
+            date,
+            result: header.result >= 0 ? cells[header.result] || undefined : undefined,
+            note: header.note >= 0 ? cells[header.note] || undefined : undefined,
+        });
+    }
+    return entries;
+}
+
+export type ReviewStats = {
+    dates: string[];
+    dailyCounts: number[];
+    cumulativeRetention: (number | null)[];
+};
+
+// 注意顺序：失败标记需先于成功标记匹配（如「未掌握」包含「掌握」）
+const REVIEW_FAIL_MARKS = ["again", "重来", "忘了", "忘记", "未记住", "未掌握", "不记得", "不熟练", "不会", "🔴"];
+const REVIEW_PASS_MARKS = ["easy", "good", "hard", "掌握", "记住", "记得", "熟练", "🟢", "绿", "✅"];
+
+function classifyReviewResult(result: string | undefined): boolean | null {
+    if (!result) {
+        return null;
+    }
+    const value = result.toLowerCase();
+    if (REVIEW_FAIL_MARKS.some((mark) => value.includes(mark))) {
+        return false;
+    }
+    if (REVIEW_PASS_MARKS.some((mark) => value.includes(mark))) {
+        return true;
+    }
+    return null;
+}
+
+// 汇总为复习留存统计：按日去重排序，留存率 = 累计(通过)/(累计(通过)+累计(失败))，
+// 无法识别结果档位的记录计入当日复习次数但不参与留存率
+export function aggregateReviewStats(entries: ReviewLogEntry[]): ReviewStats {
+    const byDate = new Map<string, { total: number; pass: number; fail: number }>();
+    for (const entry of entries) {
+        if (!entry.date) {
+            continue;
+        }
+        const day = entry.date.slice(0, 10);
+        const agg = byDate.get(day) ?? { total: 0, pass: 0, fail: 0 };
+        agg.total++;
+        const classified = classifyReviewResult(entry.result);
+        if (classified === true) {
+            agg.pass++;
+        } else if (classified === false) {
+            agg.fail++;
+        }
+        byDate.set(day, agg);
+    }
+
+    const dates = [...byDate.keys()].sort();
+    let pass = 0;
+    let fail = 0;
+    const dailyCounts: number[] = [];
+    const cumulativeRetention: (number | null)[] = [];
+    for (const date of dates) {
+        const agg = byDate.get(date)!;
+        pass += agg.pass;
+        fail += agg.fail;
+        dailyCounts.push(agg.total);
+        cumulativeRetention.push(
+            pass + fail > 0 ? Math.round((pass / (pass + fail)) * 1000) / 10 : null
+        );
+    }
+    return { dates, dailyCounts, cumulativeRetention };
 }

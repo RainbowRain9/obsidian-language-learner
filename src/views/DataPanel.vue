@@ -80,6 +80,7 @@ interface Row {
     date: string;
     senNum: number;
     noteNum: number;
+    nextReview?: string;
 }
 
 const statusLabels = computed(() => [
@@ -92,11 +93,14 @@ const statusLabels = computed(() => [
 
 
 let loading = ref(true);
+// 仅当词库中存在外部复习工具写入的「下次复习」时才显示该列
+let hasNextReview = ref(false);
 const loadData = async () => {
     loading.value = true;
     let rawData = await plugin.db.getAllExpressionSimple(false);
     data.value = [];
     const tagSet = new Set<string>();
+    hasNextReview.value = rawData.some((entry) => !!entry.next_review);
     const chunkSize = 200;
     for (let i = 0; i < rawData.length; i += chunkSize) {
         const slice = rawData.slice(i, i + chunkSize);
@@ -112,6 +116,7 @@ const loadData = async () => {
                 noteNum: entry.note_num,
                 senNum: entry.sen_num,
                 date: moment.unix(entry.date).format("YYYY-MM-DD"),
+                nextReview: entry.next_review,
             };
         });
         data.value.push(...rows);
@@ -225,6 +230,16 @@ let columns = computed<DataTableColumns<Row>>(() => [
             return moment.utc(row1.date).unix() - moment.utc(row2.date).unix();
         },
     },
+    ...(hasNextReview.value ? [{
+        title: t("Next Review"),
+        key: "nextReview",
+        render(row: Row) {
+            return row.nextReview ?? "—";
+        },
+        sorter(row1: Row, row2: Row) {
+            return (row1.nextReview ?? "").localeCompare(row2.nextReview ?? "");
+        },
+    }] : []),
 ]);
 
 

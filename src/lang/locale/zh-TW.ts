@@ -417,4 +417,9 @@ export default {
     "returned empty content": "回傳了空內容",
     "used all output tokens on reasoning before generating final content": "在產生最終內容前把輸出 token 全耗在推理內容上了",
     "Try capability mode thinking.type or increase Max Output Tokens": "請嘗試把 provider 的 capability mode 改為 thinking.type，或提高 Max Output Tokens"
+    ,"Next Review": "下次複習"
+    ,"Review Retention": "複習留存"
+    ,"Daily Reviews": "每日複習次數"
+    ,"Cumulative Retention": "累計留存率"
+    ,"No review records yet": "暫無複習記錄"
 }

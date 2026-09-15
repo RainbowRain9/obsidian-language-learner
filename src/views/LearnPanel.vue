@@ -38,6 +38,10 @@
 						</NRadioButton>
 					</NRadioGroup>
 				</NFormItem>
+				<!-- 外部复习工具（如 ScoreFlow）写入的下次复习时间 -->
+				<div v-if="nextReview" class="learn-next-review">
+					{{ t("Next Review") }}: {{ nextReview }}
+				</div>
 				<!-- 加一些tag, 可以用来搜索 -->
 				<NFormItem :label="t('Tags')" :label-style="labelStyle" path="tags">
 					<NSelect size="small" v-model:value="model.tags" filterable multiple tag
@@ -882,6 +886,8 @@ async function submit() {
 };
 
 const selectionToken = ref(0);
+// 外部复习工具写入的「下次复习」；仅在已有词条携带该字段时展示
+const nextReview = ref<string | undefined>(undefined);
 const GOOGLE_CONTEXT_MARKER_START = "[[";
 const GOOGLE_CONTEXT_MARKER_END = "]]";
 const CONTEXT_DETERMINERS = new Set([
@@ -1327,6 +1333,7 @@ function mergeExpressionWithContext(
 ) {
 	const currentModel = model.value;
 	const nextSentences = dedupeSentences(expr.sentences || []);
+	nextReview.value = expr.next_review;
 
 	if (sentenceText) {
 		if (!storedSen) {
@@ -1379,6 +1386,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	}
 
 	// Fast fill to avoid UI lag
+	nextReview.value = undefined;
 	model.value = {
 		expression: selection,
 		surface: selection,
@@ -1627,6 +1635,12 @@ watch(() => model.value, () => {
 <style lang="scss">
 #langr-learn-panel {
 	padding-bottom: 18px;
+
+	.learn-next-review {
+		margin: -8px 0 10px;
+		font-size: var(--font-ui-small);
+		color: var(--text-muted);
+	}
 
 	.n-input {
 		margin: 1px 0;

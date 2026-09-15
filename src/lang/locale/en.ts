@@ -524,4 +524,9 @@ export default {
     "returned empty content": "returned empty content",
     "used all output tokens on reasoning before generating final content": "used all output tokens on reasoning before generating final content",
     "Try capability mode thinking.type or increase Max Output Tokens": "Try capability mode thinking.type or increase Max Output Tokens"
+    ,"Next Review": "Next Review"
+    ,"Review Retention": "Review Retention"
+    ,"Daily Reviews": "Daily Reviews"
+    ,"Cumulative Retention": "Cumulative Retention"
+    ,"No review records yet": "No review records yet"
 };
