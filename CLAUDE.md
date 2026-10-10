@@ -123,7 +123,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 以下能力我在当前 `src/` 中没有找到，若用户提到它们，通常意味着它们只存在于 bundle / 参考构建，尚未完整回写源码：
 
 - “Mark as Learning Completed” 命令，以及配套写入 frontmatter 的 `completed` / `words_collected` 工作流。
-- dashboard 式统计面板（Streak、Total Words、Today New、Mastered、Heatmap、Recent Activity、Hide Meaning、从统计面板打开单词文件等）。当前 `src/views/Stat.vue` 仍然只是 7 天折线图。
+- dashboard 式统计面板的剩余部分（Streak、Today New、Mastered、Heatmap、Recent Activity、Hide Meaning、从统计面板打开单词文件等）。`src/views/Stat.vue` 目前已包含 KPI 三卡（总词汇量 / 在学词汇 / 无视词汇）、七天趋势图（`CustomChart.vue`）、双环形分布图（`DonutChart.vue`）与复习留存图四块。
 - 全局 toast 通道，例如 `obsidian-langr-toast` 事件和对应 UI。
 
 如果用户要修这些能力，优先在 `src/plugin.ts`、`src/views/Stat.vue`、`src/views/Global.vue`、对应设置与语言文件中补齐，而不是改 bundle。

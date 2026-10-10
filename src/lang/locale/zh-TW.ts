@@ -537,4 +537,10 @@ export default {
     "Rate limit exceeded (429)": "請求過於頻繁 (429)",
     "Server error (500)": "伺服器錯誤 (500)",
     "Service unavailable (503)": "服務不可用 (503)"
+    ,"Total Words": "總詞彙量"
+    ,"Learning Words": "在學詞彙"
+    ,"Ignored": "忽略詞彙"
+    ,"Vocabulary Ratio": "詞彙比例"
+    ,"Learning Words Distribution": "在學詞彙分布"
+    ,"Total": "總計"
 }

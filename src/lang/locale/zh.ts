@@ -527,4 +527,10 @@ export default {
     ,"Daily Reviews": "每日复习次数"
     ,"Cumulative Retention": "累计留存率"
     ,"No review records yet": "暂无复习记录"
+    ,"Total Words": "总词汇量"
+    ,"Learning Words": "在学词汇"
+    ,"Ignored": "无视词汇"
+    ,"Vocabulary Ratio": "词汇比例"
+    ,"Learning Words Distribution": "在学词汇分布"
+    ,"Total": "总计"
 };

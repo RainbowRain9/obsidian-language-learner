@@ -1,7 +1,36 @@
 <template>
-	<div id="chart"></div>
-	<div id="review-chart" v-show="hasReviewData"></div>
-	<div v-if="reviewLoaded && !hasReviewData" id="review-empty">{{ t("No review records yet") }}</div>
+	<div class="stat-analytics-dashboard">
+		<!-- 顶层 KPI 计数概览小卡片 -->
+		<div class="kpi-cards-row">
+			<div class="kpi-card">
+				<span class="kpi-label">{{ t("Total Words") }}</span>
+				<span class="kpi-val">{{ totalWords.toLocaleString() }}</span>
+			</div>
+			<div class="kpi-card accent-learning">
+				<span class="kpi-label">{{ t("Learning Words") }}</span>
+				<span class="kpi-val">{{ learningWords.toLocaleString() }}</span>
+			</div>
+			<div class="kpi-card accent-ignore">
+				<span class="kpi-label">{{ t("Ignored") }}</span>
+				<span class="kpi-val">{{ ignoreWords.toLocaleString() }}</span>
+			</div>
+		</div>
+
+		<!-- 中层 7 天趋势图分析 -->
+		<div class="chart-section-card">
+			<CustomChart :title="t('Words')" :dates="last7days" :series="chartSeries" />
+		</div>
+
+		<!-- 底层 2 个比例分布 Donut 饼图 -->
+		<div class="donuts-row">
+			<DonutChart :title="t('Vocabulary Ratio')" :center-label="t('Total')" :items="statusRatioItems" />
+			<DonutChart :title="t('Learning Words Distribution')" :center-label="t('Total')" :items="learningStageItems" />
+		</div>
+
+		<!-- 外部复习工具的复习留存图（echarts） -->
+		<div id="review-chart" v-show="hasReviewData"></div>
+		<div v-if="reviewLoaded && !hasReviewData" id="review-empty">{{ t("No review records yet") }}</div>
+	</div>
 </template>
 
 <script setup lang="ts">
@@ -10,6 +39,8 @@ import { onMounted, onUnmounted, getCurrentInstance, ref, watch } from "vue";
 import { currentLanguageRef, t } from "@/lang/helper";
 import LanguageLearner from "@/plugin";
 import { aggregateReviewStats } from "@/utils/word-file";
+import CustomChart from "./CustomChart.vue";
+import DonutChart, { DonutItem } from "./DonutChart.vue";
 
 import * as echarts from "echarts/core";
 
@@ -53,10 +84,6 @@ const plugin: LanguageLearner = getCurrentInstance().appContext.config.globalPro
 const container: HTMLElement =
 	getCurrentInstance().appContext.config.globalProperties.container;
 
-let charDom: HTMLElement;
-let sevenDays: echarts.EChartsType;
-let option: EChartsOption;
-
 let reviewDom: HTMLElement;
 let reviewChart: echarts.EChartsType;
 let reviewOption: EChartsOption;
@@ -64,85 +91,27 @@ let reviewOption: EChartsOption;
 let hasReviewData = ref(false);
 let reviewLoaded = ref(false);
 
-onMounted(async () => {
-	charDom = container.querySelector("#chart");
-	// setTimeout(() => {
-	sevenDays = echarts.init(charDom, null, {
-		width: 400,
-		height: 350,
-	});
-	option && sevenDays.setOption(option);
-	reviewDom = container.querySelector("#review-chart");
-	reviewChart = echarts.init(reviewDom, null, {
-		width: 400,
-		height: 350,
-	});
-	reviewOption && reviewChart.setOption(reviewOption);
-	applyChartLabels();
-	// },0)
-	updateChart();
-	updateReviewChart();
-});
+// 语言切换时重建 dashboard 标签所需的原始计数（0=ignore / 1=learning / 2=familiar / 3=known / 4=learned）
+let rawWordCounts = [0, 0, 0, 0, 0];
 
 const last7days = [6, 5, 4, 3, 2, 1, 0].map((i) =>
 	moment().subtract(i, "days").format("M-D")
 );
 
-option = {
-	title: {
-		text: t("Words"),
-	},
-	tooltip: {
-		trigger: "axis",
-	},
-	xAxis: {
-		type: "category",
-		boundaryGap: false,
-		data: last7days,
-	},
-	yAxis: {
-		type: "value",
-	},
-	series: [
-		{
-			name: t("Day Ignore"),
-			data: [],
-			type: "line",
-			areaStyle: {},
-			smooth: true,
-			// encode: {
-			//   tooltip: ["words"]
-			// },
-			emphasis: {
-				focus: "series",
-			},
-			stack: "single",
-		},
-		{
-			name: t("Day Non-Ignore"),
-			data: [],
-			type: "line",
-			areaStyle: {},
-			smooth: true,
-			// encode: {
-			//   tooltip: ["words"]
-			// },
-			emphasis: {
-				focus: "series",
-			},
-			stack: "single",
-		},
-		{
-			name: t("Accumulated"),
-			data: [],
-			type: "line",
-			smooth: true,
-			emphasis: {
-				focus: "series",
-			},
-		},
-	],
-};
+// 7 天趋势图数据（零依赖 SVG CustomChart）
+const chartSeries = ref([
+	{ name: t("Day Ignore"), color: "#4c6ef5", data: [0, 0, 0, 0, 0, 0, 0], type: "area" as const },
+	{ name: t("Day Non-Ignore"), color: "#51cf66", data: [0, 0, 0, 0, 0, 0, 0], type: "area" as const },
+]);
+
+// KPI 统计数据
+const totalWords = ref(0);
+const learningWords = ref(0);
+const ignoreWords = ref(0);
+
+// Donut 饼图数据
+const statusRatioItems = ref<DonutItem[]>([]);
+const learningStageItems = ref<DonutItem[]>([]);
 
 reviewOption = {
 	title: {
@@ -194,22 +163,19 @@ reviewOption = {
 	],
 };
 
-function applyChartLabels() {
-	if (!sevenDays) {
-		return;
-	}
-
-	sevenDays.setOption({
-		title: {
-			text: t("Words"),
-		},
-		series: [
-			{ name: t("Day Ignore") },
-			{ name: t("Day Non-Ignore") },
-			{ name: t("Accumulated") },
-		],
+onMounted(async () => {
+	reviewDom = container.querySelector("#review-chart");
+	reviewChart = echarts.init(reviewDom, null, {
+		width: 400,
+		height: 350,
 	});
+	reviewOption && reviewChart.setOption(reviewOption);
+	applyChartLabels();
+	updateChart();
+	updateReviewChart();
+});
 
+function applyChartLabels() {
 	reviewChart?.setOption({
 		title: {
 			text: t("Review Retention"),
@@ -225,20 +191,58 @@ function applyChartLabels() {
 }
 
 async function updateChart() {
+	// 获取 7 天趋势数据
 	let data = await plugin.db.countSeven();
 	let dayIgnoreWords = data.map((d) => d.today[0]);
 	let dayNoIgnoreWords = data.map((d) =>
 		d.today.slice(1).reduce((a, b) => a + b)
 	);
-	let accumAllWords = data.map((d) => d.accumulated.reduce((a, b) => a + b));
 
-	sevenDays.setOption({
-		series: [
-			{ data: dayIgnoreWords },
-			{ data: dayNoIgnoreWords },
-			{ data: accumAllWords },
-		],
-	});
+	// 更新原生 SVG 曲线图数据（暂时隐藏累计）
+	chartSeries.value = [
+		{ name: t("Day Ignore"), color: "#4c6ef5", data: dayIgnoreWords, type: "area" },
+		{ name: t("Day Non-Ignore"), color: "#51cf66", data: dayNoIgnoreWords, type: "area" },
+	];
+
+	// 获取单词全局状态统计数据
+	try {
+		let countInfo = await plugin.db.getCount();
+		let wordCounts = countInfo.word_count || [0, 0, 0, 0, 0];
+
+		rawWordCounts = wordCounts;
+		applyCountLabels(wordCounts);
+	} catch (e) {
+		console.warn("Failed to load word count info", e);
+	}
+}
+
+function applyCountLabels(wordCounts: number[]) {
+	let ignoreCount = wordCounts[0] || 0;
+	let learningCount = wordCounts[1] || 0;
+	let familiarCount = wordCounts[2] || 0;
+	let knownCount = wordCounts[3] || 0;
+	let learnedCount = wordCounts[4] || 0;
+
+	let totalLearningCount = learningCount + familiarCount + knownCount + learnedCount;
+	let totalAllCount = ignoreCount + totalLearningCount;
+
+	totalWords.value = totalAllCount;
+	learningWords.value = totalLearningCount;
+	ignoreWords.value = ignoreCount;
+
+	// 图一：词汇比例 (无视 vs 在学)
+	statusRatioItems.value = [
+		{ name: t("Ignore"), value: ignoreCount, color: "#748096" },
+		{ name: t("Learning Words"), value: totalLearningCount, color: "#4c6ef5" },
+	];
+
+	// 图二：在学词汇分布
+	learningStageItems.value = [
+		{ name: t("Learning"), value: learningCount, color: "#ff922b" },
+		{ name: t("Familiar"), value: familiarCount, color: "#fcc419" },
+		{ name: t("Known"), value: knownCount, color: "#51cf66" },
+		{ name: t("Learned"), value: learnedCount, color: "#20c997" },
+	];
 }
 
 async function updateReviewChart() {
@@ -263,6 +267,18 @@ async function updateReviewChart() {
 	});
 }
 
+// 语言切换时重建 dashboard 各图表的 t() 标签
+function applyDashboardLabels() {
+	const seriesNames = [t("Day Ignore"), t("Day Non-Ignore")];
+	chartSeries.value = chartSeries.value.map((seriesItem, idx) => {
+		if (idx < seriesNames.length) {
+			return { ...seriesItem, name: seriesNames[idx] };
+		}
+		return seriesItem;
+	});
+	applyCountLabels(rawWordCounts);
+}
+
 function refreshCharts() {
 	updateChart();
 	updateReviewChart();
@@ -273,19 +289,90 @@ onMounted(() => {
 });
 
 watch(() => currentLanguageRef.value, () => {
+	applyDashboardLabels();
 	applyChartLabels();
 });
 
 onUnmounted(() => {
 	removeEventListener("obsidian-langr-refresh-stat", refreshCharts);
 	// 释放 echarts 实例，避免反复开关统计视图造成实例与已分离 DOM 引用累积泄漏
-	sevenDays?.dispose();
 	reviewChart?.dispose();
 });
 
 </script>
 
-<style scoped>
+<style lang="scss">
+.stat-analytics-dashboard {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 8px 6px;
+	width: 100%;
+	box-sizing: border-box;
+
+	.kpi-cards-row {
+		display: flex;
+		gap: 6px;
+		width: 100%;
+		box-sizing: border-box;
+
+		.kpi-card {
+			flex: 1;
+			min-width: 0;
+			background-color: var(--background-secondary, #ffffff);
+			border: 1px solid var(--background-modifier-border, rgba(128, 128, 128, 0.18));
+			border-radius: var(--radius-m, 6px);
+			padding: 6px 8px;
+			display: flex;
+			flex-direction: column;
+			box-sizing: border-box;
+
+			.kpi-label {
+				font-size: 0.75em;
+				color: var(--text-muted);
+				margin-bottom: 2px;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			.kpi-val {
+				font-size: 1.1em;
+				font-weight: 700;
+				color: var(--text-normal);
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			&.accent-learning .kpi-val {
+				color: var(--text-accent, #4c6ef5);
+			}
+
+			&.accent-ignore .kpi-val {
+				color: var(--text-muted, #748096);
+			}
+		}
+	}
+
+	.chart-section-card {
+		background-color: var(--background-secondary, #ffffff);
+		border: 1px solid var(--background-modifier-border, rgba(128, 128, 128, 0.18));
+		border-radius: var(--radius-m, 8px);
+		padding: 8px 6px 4px 6px;
+		box-sizing: border-box;
+		width: 100%;
+	}
+
+	.donuts-row {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		width: 100%;
+		box-sizing: border-box;
+	}
+}
+
 #review-empty {
 	width: 400px;
 	padding: 24px 0;

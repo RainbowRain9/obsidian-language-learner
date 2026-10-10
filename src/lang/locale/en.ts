@@ -530,4 +530,10 @@ export default {
     ,"Daily Reviews": "Daily Reviews"
     ,"Cumulative Retention": "Cumulative Retention"
     ,"No review records yet": "No review records yet"
+    ,"Total Words": "Total Words"
+    ,"Learning Words": "Learning Words"
+    ,"Ignored": "Ignored"
+    ,"Vocabulary Ratio": "Vocabulary Ratio"
+    ,"Learning Words Distribution": "Learning Words Distribution"
+    ,"Total": "Total"
 };
