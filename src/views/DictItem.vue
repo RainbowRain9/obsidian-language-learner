@@ -31,10 +31,8 @@
 
 <script setup lang="ts">
 import { ref, watch, getCurrentInstance, toRef } from "vue";
-import { Platform } from "obsidian";
 import PluginType from "@/plugin";
 import { t } from "@/lang/helper";
-import { getRGB } from "@/utils/style";
 
 const plugin = getCurrentInstance().appContext.config.globalProperties
     .plugin as PluginType;
