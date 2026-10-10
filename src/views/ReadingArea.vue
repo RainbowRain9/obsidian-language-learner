@@ -53,7 +53,7 @@
                 }" v-html="renderedText" />
             <!-- 底栏 -->
             <div class="pagination" style="
-                    padding-top: 10px;
+                    padding: 10px 0;
                     border-top: 2px solid gray;
                     display: flex;
                     flex-direction: column;
@@ -527,7 +527,8 @@ if (audioSource) {
     if (audioSource.startsWith("~/")) {
         // 标准的 ~/ 路径格式
         const relativePath = audioSource.slice(2); // 移除 "~/"
-        const prefix = Platform.isDesktopApp ? "app://local/" : "http://localhost/_capacitor_file_";
+        // 桌面端本地文件前缀需动态获取（新版 Obsidian 已不固定为 app://local/，上游 issue #157）
+        const prefix = Platform.isDesktopApp ? require("electron").ipcRenderer.sendSync("file-url") : "http://localhost/_capacitor_file_";
         audioSource = prefix + plugin.constants.basePath + "/" + relativePath;
         console.log("[Language Learner] Converted ~/ path to:", audioSource);
     } else if (!audioSource.startsWith("http://") && !audioSource.startsWith("https://") && !audioSource.startsWith("app://")) {
@@ -540,7 +541,7 @@ if (audioSource) {
         } catch (error) {
             console.error("[Language Learner] Failed to resolve resource path:", error);
             // 如果失败，尝试使用旧方法
-            const prefix = Platform.isDesktopApp ? "app://local/" : "http://localhost/_capacitor_file_";
+            const prefix = Platform.isDesktopApp ? require("electron").ipcRenderer.sendSync("file-url") : "http://localhost/_capacitor_file_";
             audioSource = prefix + plugin.constants.basePath + "/" + audioSource;
             console.log("[Language Learner] Fallback to manual path:", audioSource);
         }
@@ -589,7 +590,7 @@ watchEffect(async (clean) => {
 function onMouseOver(e: MouseEvent) {
     let target = e.target as HTMLElement;
     if (target.hasClass("internal-link")) {
-        app.workspace.trigger("hover-link", {
+        plugin.app.workspace.trigger("hover-link", {
             event: e,
             source: "preview",
             hoverParent: { hoverPopover: null },

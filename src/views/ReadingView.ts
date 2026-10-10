@@ -16,7 +16,7 @@ import {
 import { App as VueApp, createApp } from 'vue';
 import { state } from "./parser";
 import LanguageLearner from '@/plugin';
-import ReadingArea from 'ReadingArea.vue';
+import ReadingArea from './ReadingArea.vue';
 import { t } from "@/lang/helper";
 import DbProvider from "../db/base";
 import { WordDB, Expression } from "../db/idb";
