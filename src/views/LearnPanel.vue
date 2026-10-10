@@ -594,7 +594,7 @@ function removeNote(index: number) {
 }
 
 function handleNoteKeydown(event: KeyboardEvent, index: number) {
-	if (event.key !== "Enter" || event.shiftKey) {
+	if (event.isComposing || event.key !== "Enter" || event.shiftKey) {
 		return;
 	}
 
@@ -817,16 +817,18 @@ async function runAIAutofill(options: RunAIAutofillOptions = {}) {
 
 async function submit() {
 	// 表单内容检查
-	if (!model.value.expression) {
+	const expressionText = (model.value.expression || "").trim();
+	const meaningText = (model.value.meaning || "").trim();
+	if (!expressionText) {
 		new Notice(t("Expression is empty!"));
 		return;
 	}
-	if (!model.value.meaning) {
+	if (!meaningText) {
 		new Notice(t("Meaning is empty!"));
 		return;
 	}
 	if (
-		model.value.expression.trim().split(" ").length > 1 &&
+		expressionText.split(" ").length > 1 &&
 		model.value.t === "WORD"
 	) {
 		new Notice(t("It looks more like a PHRASE than a WORD"));
@@ -880,6 +882,9 @@ async function submit() {
 			plugin.scheduleRefreshTextDB(500);
 		}
 		new Notice(t("Submit succeeded"));
+	} catch (e) {
+		new Notice(t("Submit failed"));
+		console.error("Submit failed with exception", e);
 	} finally {
 		submitLoading.value = false;
 	}
@@ -1378,9 +1383,8 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		sentenceText = sanitizeSentenceText(sentenceEl?.textContent || "");
 
 		let reading = view.app.workspace.getActiveViewOfType(ReadingView);
-		if (reading && !defaultOrigin) {
-			let presetOrigin = view.app.metadataCache.getFileCache(reading.file)
-				.frontmatter["langr-origin"];
+		if (reading?.file && !defaultOrigin) {
+			let presetOrigin = view.app.metadataCache.getFileCache(reading.file)?.frontmatter?.["langr-origin"];
 			defaultOrigin = presetOrigin ? presetOrigin : reading.file.name;
 		}
 	}
@@ -1419,20 +1423,40 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		: Promise.resolve(null);
 	const formsPromise = youdaoSearch(selection).catch((): null => null);
 	const defaultSentenceTranslationMode = getDefaultSentenceTranslationMode();
-	const translationPromise = plugin.settings.use_machine_trans
-		? (
-			defaultSentenceTranslationMode === "machine"
-				? translateMeaningWithContext(selection, sentenceText).catch((): null => null)
-				: sentenceText
-					? aiTranslate(sentenceText, plugin.settings)
-						.then((translated) => ({
-							sentenceTranslation: decodeHtmlEntities(translated),
-							meaningTranslation: "",
-						}))
-						.catch((): null => null)
-					: Promise.resolve(null)
-		)
-		: Promise.resolve(null);
+	let translationPromise: Promise<{ sentenceTranslation: string; meaningTranslation: string } | null> | null = null;
+	const requestTranslation = (): Promise<{ sentenceTranslation: string; meaningTranslation: string } | null> => {
+		if (!translationPromise) {
+			translationPromise = (async () => {
+				if (!plugin.settings.use_machine_trans) {
+					return null;
+				}
+				if (sentenceText) {
+					// 存储句或组件缓存已有翻译时直接复用，避免发起注定被丢弃的重复请求
+					const storedSen = sanitizeSentenceRecord(await storedSenPromise);
+					if (storedSen?.trans) {
+						return { sentenceTranslation: storedSen.trans, meaningTranslation: "" };
+					}
+					const cachedTranslation = translationCache.value[sentenceText]?.[defaultSentenceTranslationMode];
+					if (cachedTranslation) {
+						return { sentenceTranslation: cachedTranslation, meaningTranslation: "" };
+					}
+				}
+				if (defaultSentenceTranslationMode === "machine") {
+					return translateMeaningWithContext(selection, sentenceText).catch((): null => null);
+				}
+				if (!sentenceText) {
+					return null;
+				}
+				return aiTranslate(sentenceText, plugin.settings)
+					.then((translated) => ({
+						sentenceTranslation: decodeHtmlEntities(translated),
+						meaningTranslation: "",
+					}))
+					.catch((): null => null);
+			})();
+		}
+		return translationPromise;
+	};
 	const meaningAutofillMode = plugin.settings.meaning_autofill_mode;
 
 	const isCurrent = () => selectionToken.value === token;
@@ -1467,7 +1491,8 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		if (!storedExpressionApplied) {
 			for (const candidate of wordInfo.lookupCandidates) {
 				const expr = await plugin.db.getExpression(candidate).catch((): null => null);
-				if (!expr || !isCurrent()) continue;
+				if (!isCurrent()) return;
+				if (!expr) continue;
 				const storedSen = sanitizeSentenceRecord(await storedSenPromise);
 				if (!isCurrent()) return;
 				if (shouldSkipStoredExpressionMerge(expr, selection, sentenceText)) continue;
@@ -1476,6 +1501,8 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 				break;
 			}
 		}
+
+		if (!isCurrent()) return;
 
 		if (!storedExpressionApplied && wordInfo.resolvedBaseExpression && model.value.t === "WORD") {
 			model.value.expression = wordInfo.resolvedBaseExpression;
@@ -1495,7 +1522,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 		if (!model.value.meaning) {
 			const translationResult =
 				meaningAutofillMode === "context-translation" || meaningAutofillMode === "context-pos"
-					? await translationPromise
+					? await requestTranslation()
 					: null;
 			if (!isCurrent()) return;
 
@@ -1521,7 +1548,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 	})();
 
 	void (async () => {
-		const res = await translationPromise;
+		const res = await requestTranslation();
 		if (!isCurrent()) return;
 		if (!sentenceText || !res?.sentenceTranslation) return;
 		const sentences = model.value.sentences || [];

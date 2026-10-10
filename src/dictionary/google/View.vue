@@ -21,9 +21,11 @@
 import { ref, onMounted, watch } from "vue";
 import { search, GoogleResult } from "./engine";
 import { useLoading } from "@dict/uses";
+import type { SearchSession } from "@dict/uses";
 
 const props = defineProps<{
     word: string;
+    searchNonce?: number;
 }>();
 
 const emits = defineEmits<{
@@ -52,17 +54,18 @@ import { t } from "@/lang/helper";
 
 const plugin = getCurrentInstance()?.appContext.config.globalProperties.plugin as LanguageLearner;
 
-async function onSearch() {
-    if (!plugin) return false;
+async function onSearch(session: SearchSession): Promise<boolean> {
+    if (!plugin || !props.word) return false;
     const res = await search(props.word, plugin.settings);
-    if (res && res.result) {
+    // 慢的旧请求晚到时不再写回，避免覆盖新查询的结果
+    if (res && res.result && !session.isStale()) {
         result.value = res.result;
         return true;
     }
     return false;
 }
 
-useLoading(() => props.word, "google", onSearch, emits);
+useLoading(() => [props.word, props.searchNonce], "google", onSearch, emits);
 
 </script>
 

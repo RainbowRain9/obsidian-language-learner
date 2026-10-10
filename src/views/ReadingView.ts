@@ -72,17 +72,30 @@ export class ReadingView extends TextFileView {
         this.text = data;
 
         if (this.firstInit) {
-            let lastPos = await this.plugin.frontManager.getFrontMatter(this.file, "langr-pos");
-            this.lastPos = parseInt(lastPos);
-
-            this.vueapp = createApp(ReadingArea);
-            this.vueapp.config.globalProperties.plugin = this.plugin;
-            this.vueapp.config.globalProperties.view = this;
-            this.vueapp.mount(this.contentEl);
-
+            await this.mountReadingArea();
             this.firstInit = false;
+        } else if (clear) {
+            // clear=true 表示同一视图实例被复用打开另一个文件：
+            // ReadingArea 在 setup 时快照 view.text / view.file / view.lastPos，必须卸载重建才会渲染新文章
+            if (this.saveWordsTimer !== null) {
+                window.clearTimeout(this.saveWordsTimer);
+                this.saveWordsTimer = null;
+            }
+            this.vueapp.unmount();
+            await this.mountReadingArea();
         }
         //this.plugin.setMarkdownView(this.leaf, false)
+    }
+
+    //读取 langr-pos 并把 ReadingArea 挂载到 contentEl
+    private async mountReadingArea() {
+        let lastPos = await this.plugin.frontManager.getFrontMatter(this.file, "langr-pos");
+        this.lastPos = parseInt(lastPos);
+
+        this.vueapp = createApp(ReadingArea);
+        this.vueapp.config.globalProperties.plugin = this.plugin;
+        this.vueapp.config.globalProperties.view = this;
+        this.vueapp.mount(this.contentEl);
     }
 
     getViewType(): string {
@@ -300,7 +313,11 @@ export class ReadingView extends TextFileView {
         let seg = this.divide(lines);
         if (!seg[type]) {
             if (create) {
-                await this.plugin.app.vault.modify(this.file, oldText + `\n^^^${type}\n\n`);
+                // 追加分节的写也要走同文件互斥，避免与 langr-pos 等 frontmatter 写入互相覆盖
+                await this.plugin.frontManager.runExclusive(this.file, async () => {
+                    const currentText = await this.plugin.app.vault.read(this.file);
+                    await this.plugin.app.vault.modify(this.file, currentText + `\n^^^${type}\n\n`);
+                });
                 return "";
             }
             return null;
@@ -310,16 +327,19 @@ export class ReadingView extends TextFileView {
 
     //用于写type内容
     async writeContent(type: string, content: string): Promise<void> {
-        let oldText = await this.plugin.app.vault.read(this.file);
-        let lines = oldText.split("\n");
-        let seg = this.divide(lines);
-        if (!seg[type]) {
-            return;
-        }
-        let newText = lines.slice(0, seg[type].start).join("\n") +
-            "\n" + content.trim() + "\n\n" +
-            lines.slice(seg[type].end, lines.length).join("\n");
-        await this.plugin.app.vault.modify(this.file, newText);
+        // 与 frontManager 的 frontmatter 写入共用同一把按文件串行化的锁，消除并发整文件覆盖
+        await this.plugin.frontManager.runExclusive(this.file, async () => {
+            let oldText = await this.plugin.app.vault.read(this.file);
+            let lines = oldText.split("\n");
+            let seg = this.divide(lines);
+            if (!seg[type]) {
+                return;
+            }
+            let newText = lines.slice(0, seg[type].start).join("\n") +
+                "\n" + content.trim() + "\n\n" +
+                lines.slice(seg[type].end, lines.length).join("\n");
+            await this.plugin.app.vault.modify(this.file, newText);
+        });
     }
 
     scheduleSaveWords(delay = 150) {
@@ -490,7 +510,9 @@ export class ReadingView extends TextFileView {
                             el.remove();
                             phraseEl.appendChild(el);
                         });
-                        idx += words.length - 1;
+                        // children 是 live HTMLCollection：匹配到的节点已折叠为 phraseEl 这一个子元素，
+                        // 上面的 idx++ 正好落在其后的元素上；再额外跳过（words.length-1 或 container.length-1）
+                        // 会越过同句中紧随其后的其他出现位置
                     }
                 }
             });
@@ -506,15 +528,22 @@ export class ReadingView extends TextFileView {
             elStart.parentElement !== elEnd.parentElement) {
             return null;
         }
-        let parent = elStart.parentNode;
+        // 从右往左划选时终点在起点之前，沿 nextSibling 遍历会走到 null，先按文档顺序归一化起止
+        let start = elStart;
+        let end = elEnd;
+        if (start !== end &&
+            !(start.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+            [start, end] = [end, start];
+        }
+        let parent = start.parentNode;
         let selectSpan = document.body.createSpan({ cls: "select" });
-        parent.insertBefore(selectSpan, elStart);
-        for (let el: Node = elStart; el !== elEnd;) {
+        parent.insertBefore(selectSpan, start);
+        for (let el: Node = start; el !== end;) {
             let next = el.nextSibling;
             selectSpan.appendChild(el);
             el = next;
         }
-        selectSpan.appendChild(elEnd);
+        selectSpan.appendChild(end);
         return selectSpan;
     }
 

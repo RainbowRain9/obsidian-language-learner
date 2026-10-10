@@ -124,7 +124,7 @@ const themeConfig: GlobalThemeOverrides = {
     },
 };
 
-let frontMatter = plugin.app.metadataCache.getFileCache(view.file).frontmatter;
+let frontMatter = (view.file ? plugin.app.metadataCache.getFileCache(view.file)?.frontmatter : undefined) ?? {};
 
 console.log('[Language Learner] Frontmatter:', frontMatter);
 
@@ -342,8 +342,35 @@ function showAddResourcesMenu(e: MouseEvent) {
     menu.showAtMouseEvent(e);
 }
 
+// 视频 watchEffect 的观察器与定时器，effect 重跑或组件卸载时统一回收
+let videoObserver: MutationObserver | null = null;
+let videoShadowInterval: number | null = null;
+let videoShadowTimeout: number | null = null;
+let videoFallbackTimeout: number | null = null;
+
+function cleanupVideoWatch() {
+    if (videoShadowInterval !== null) {
+        window.clearInterval(videoShadowInterval);
+        videoShadowInterval = null;
+    }
+    if (videoShadowTimeout !== null) {
+        window.clearTimeout(videoShadowTimeout);
+        videoShadowTimeout = null;
+    }
+    if (videoFallbackTimeout !== null) {
+        window.clearTimeout(videoFallbackTimeout);
+        videoFallbackTimeout = null;
+    }
+    videoObserver?.disconnect();
+    videoObserver = null;
+    videoContainer.value?.empty();
+}
+
 // 使用 Media Extended 渲染视频
 watchEffect(async (clean) => {
+    clean(() => {
+        cleanupVideoWatch();
+    });
     console.log('[Language Learner] watchEffect triggered');
     console.log('[Language Learner] videoContainer.value:', videoContainer.value);
     console.log('[Language Learner] videoSource:', videoSource);
@@ -441,29 +468,35 @@ watchEffect(async (clean) => {
         if (mediaEmbed) {
             fixMediaExtendedLayout();
             // 继续观察 Shadow DOM 的创建
-            const checkShadow = setInterval(() => {
+            videoShadowInterval = window.setInterval(() => {
                 const shadowHost = videoContainer.value?.querySelector('.mx-player-shadow-root');
                 if (shadowHost && (shadowHost as any).shadowRoot) {
                     fixMediaExtendedLayout();
-                    clearInterval(checkShadow);
+                    if (videoShadowInterval !== null) {
+                        window.clearInterval(videoShadowInterval);
+                        videoShadowInterval = null;
+                    }
                 }
             }, 100);
             // 5秒后停止检查
-            setTimeout(() => clearInterval(checkShadow), 5000);
+            videoShadowTimeout = window.setTimeout(() => {
+                if (videoShadowInterval !== null) {
+                    window.clearInterval(videoShadowInterval);
+                    videoShadowInterval = null;
+                }
+                videoShadowTimeout = null;
+            }, 5000);
         }
     });
 
+    videoObserver = observer;
     observer.observe(videoContainer.value, { childList: true, subtree: true });
-    
+
     // 3秒超时兜底
-    setTimeout(() => {
+    videoFallbackTimeout = window.setTimeout(() => {
         observer.disconnect();
         fixMediaExtendedLayout();
     }, 3000);
-    
-    clean(() => {
-        videoContainer.value?.empty();
-    });
 });
 
 // 监听高度变化，确保 Media Extended 容器同步调整
@@ -562,7 +595,7 @@ function onMouseOver(e: MouseEvent) {
             hoverParent: { hoverPopover: null },
             targetEl: target,
             linktext: target.getAttr("href"),
-            soursePath: view.file.path,
+            sourcePath: view.file.path,
         });
     }
 }
@@ -571,8 +604,15 @@ function onMouseOver(e: MouseEvent) {
 let lines = view.text.split("\n");
 let segments = view.divide(lines);
 
-let article = lines.slice(segments["article"].start, segments["article"].end);
+let article = segments["article"]
+    ? lines.slice(segments["article"].start, segments["article"].end)
+    : [];
 let totalLines = article.length;
+if (!segments["article"]) {
+    new Notice(
+        'Missing "^^^article" section marker. 笔记正文缺少 ^^^article 分节标记，无法解析阅读内容。'
+    );
+}
 
 // 计数
 let unknown = ref(0);
@@ -602,18 +642,23 @@ if (plugin.settings.word_count) {
 
     onMounted(() => {
         addEventListener("obsidian-langr-refresh", refreshCount);
-        // 添加音频点击事件监听
-        if (contentEl) {
-            contentEl.addEventListener("click", handleAudioClick);
-        }
     });
     onUnmounted(() => {
         removeEventListener("obsidian-langr-refresh", refreshCount);
-        if (contentEl) {
-            contentEl.removeEventListener("click", handleAudioClick);
-        }
     });
 }
+
+// 行内音频点击播放与词数统计设置无关，始终注册
+onMounted(() => {
+    if (contentEl) {
+        contentEl.addEventListener("click", handleAudioClick);
+    }
+});
+onUnmounted(() => {
+    if (contentEl) {
+        contentEl.removeEventListener("click", handleAudioClick);
+    }
+});
 
 // 追踪当前播放的音频
 let currentAudio: HTMLAudioElement | null = null;
@@ -894,7 +939,7 @@ async function addIgnores() {
 }
 
 async function processContent(){
-    let textArea = document.querySelector('.text-area');
+    let textArea = textAreaRef.value;
     if (!textArea) {
         return;
     }
@@ -906,8 +951,8 @@ async function processContent(){
         lastProcessedHtml = htmlContent;
         return;
     }
-    //使用正则表达式匹配同时包含特定符号的 <p> 标签元素，并去除所有标签保留文本
-    htmlContent = htmlContent.replace(/<p>(?=.*!)(?=.*\[)(?=.*\])(?=.*\()(?=.*\)).*<\/p>/g, function(match) {
+    //使用正则表达式逐段匹配包含图片语法 ![alt](src) 的单个 <p> 标签元素，并去除所有标签保留文本
+    htmlContent = htmlContent.replace(/<p>(?=(?:(?!<\/p>)[\s\S])*!\[[^\]]*\]\([^)]*\))(?:(?!<\/p>)[\s\S])*<\/p>/g, function(match) {
         var pattern = /!\[(.*?)\]\((.*?)\)/;
         var str = match.replace(/<[^>]+>/g, '');
         var tq = pattern.exec(str);
@@ -934,10 +979,10 @@ async function processContent(){
                 img.src =  mergeStrings(imgnum,srcUrl);
                 imgWrapper.appendChild(img);
                 imgContainer.appendChild(imgWrapper);
-                return imgContainer.innerHTML; 
+                return imgContainer.innerHTML;
             }
         }
-        
+        return match;
     });
     // 渲染多级标题
     htmlContent = htmlContent.replace(/(<span class="stns">)# (.*?)(<\/span>)(?=\s*<\/p>)/g, '<h1>$1$2$3</h1>');
@@ -1194,6 +1239,7 @@ if (plugin.constants.platform === "mobile") {
             }
         } else {
             view.removeSelect();
+            prevEl = null;
         }
     });
 }
@@ -1205,6 +1251,21 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+    // 停止视频高度拖拽残留的 document 级监听
+    stopResize();
+    // 暂停仍在播放的行内音频
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+    }
+    if (currentAudioMarker) {
+        currentAudioMarker.classList.remove("playing");
+        currentAudioMarker = null;
+    }
+    // 清理悬停释义的定时器与在途请求，防止孤儿 tooltip 与多余翻译请求
+    hideHoverTooltip();
+    // 立即回收视频观察器与定时器
+    cleanupVideoWatch();
     if (textAreaRef.value) {
         textAreaRef.value.removeEventListener("scroll", hoverScrollHandler);
     }

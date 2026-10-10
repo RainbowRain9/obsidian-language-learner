@@ -131,6 +131,15 @@ function normalizeStatusValue(value: unknown): number {
     return 0;
 }
 
+// 对全文做哈希：只看长度和首尾 256 字符会漏判中部等长修改（如改一个错别字）
+function computeWordDbHash(text: string): string {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+        hash = (Math.imul(hash, 31) + text.charCodeAt(i)) | 0;
+    }
+    return `${text.length}-${hash >>> 0}`;
+}
+
 export default class LanguageLearner extends Plugin {
     constants: { basePath: string; platform: "mobile" | "desktop"; };
     settings: MyPluginSettings;
@@ -139,16 +148,23 @@ export default class LanguageLearner extends Plugin {
     db: DbProvider;
     // server field removed - self-server feature no longer available
     parser: TextParser;
-    markdownButtons: Record<string, HTMLElement> = {};
     frontManager: FrontMatterManager;
     store: typeof store = store;
+    // 标题栏「转为阅读模式」按钮按 leaf 记录，避免所有 markdown leaf 共享单一全局槽位
+    // 导致的重复按钮 / 死引用；Set 仅用于 onunload 时统一移除残留按钮
+    private markdownReadingButtons = new WeakMap<WorkspaceLeaf, HTMLElement>();
+    private markdownReadingButtonEls = new Set<HTMLElement>();
     private parserAllFMCache: ExpressionInfo[] | null = null;
     private parserAllFMDirty = true;
     private parserAllFMFolder = "";
+    private parserAllFMGeneration = 0;
     private reviewLogsCache: ReviewLogEntry[] | null = null;
     private refreshTextDbTimer: number | null = null;
     private refreshTextDbRunning = false;
     private refreshTextDbQueued = false;
+    private refreshReviewDbRunning = false;
+    private refreshReviewDbQueued = false;
+    private activateViewTasks = new Map<string, Promise<void>>();
 
     applyUiLanguage(lang?: string | null): UiLanguage {
         const normalized = setLanguage(lang);
@@ -252,6 +268,7 @@ export default class LanguageLearner extends Plugin {
     }
 
     private invalidateParserAllFMCache() {
+        this.parserAllFMGeneration += 1;
         this.parserAllFMDirty = true;
         this.parserAllFMCache = null;
         this.reviewLogsCache = null;
@@ -272,13 +289,29 @@ export default class LanguageLearner extends Plugin {
     }
 
     async onunload() {
+        if (this.refreshTextDbTimer !== null) {
+            window.clearTimeout(this.refreshTextDbTimer);
+            this.refreshTextDbTimer = null;
+        }
+
         this.app.workspace.detachLeavesOfType(SEARCH_PANEL_VIEW);
         this.app.workspace.detachLeavesOfType(LEARN_PANEL_VIEW);
         this.app.workspace.detachLeavesOfType(DATA_PANEL_VIEW);
         this.app.workspace.detachLeavesOfType(STAT_VIEW_TYPE);
         this.app.workspace.detachLeavesOfType(READING_VIEW_TYPE);
 
-        this.db.close();
+        // 移除仍挂在 markdown 视图标题栏上的「转为阅读模式」按钮，
+        // 避免插件卸载后残留按钮点击已注销的视图类型
+        for (const button of this.markdownReadingButtonEls) {
+            button.remove();
+        }
+        this.markdownReadingButtonEls.clear();
+        this.markdownReadingButtons = new WeakMap<WorkspaceLeaf, HTMLElement>();
+
+        // ReadingView.onClose 的 flushSaveWords 是异步的且内部仍要查询 db，
+        // 延迟关闭数据库，让最后一批 words 段写入先完成
+        const db = this.db;
+        window.setTimeout(() => db.close(), 5000);
         // Self-server feature removed - no server to close
         if (await app.vault.adapter.exists(".obsidian/plugins/obsidian-language-learner/pdf/web/viewer.html")) {
             this.registerExtensions([PDF_FILE_EXTENSION], "pdf");
@@ -624,7 +657,7 @@ export default class LanguageLearner extends Plugin {
             .join("\n");
 
         let text = word2Meaning + "\n\n" + `#### ${t("Reverse Lookup")}\n` + meaning2Word;
-        const hash = `${words.length}-${text.length}-${text.slice(0, 256)}-${text.slice(-256)}`;
+        const hash = `${words.length}-${computeWordDbHash(text)}`;
         if (this.settings.last_word_db_hash === hash) {
             return;
         }
@@ -635,6 +668,24 @@ export default class LanguageLearner extends Plugin {
     };
 
     refreshReviewDb = async () => {
+        // review.md 的读-改-写需要互斥：命令面板与设置按钮会绕过 runRefreshTextDB 直接调用这里
+        if (this.refreshReviewDbRunning) {
+            this.refreshReviewDbQueued = true;
+            return;
+        }
+        this.refreshReviewDbRunning = true;
+        try {
+            await this.doRefreshReviewDb();
+        } finally {
+            this.refreshReviewDbRunning = false;
+            if (this.refreshReviewDbQueued) {
+                this.refreshReviewDbQueued = false;
+                void this.refreshReviewDb();
+            }
+        }
+    };
+
+    private async doRefreshReviewDb() {
         if (!this.settings.review_database) {
             return;
         }
@@ -712,7 +763,7 @@ export default class LanguageLearner extends Plugin {
         await this.app.vault.modify(db, newText);
         this.settings.last_sync = moment.utc().toISOString();
         await this.saveSettings();
-    };
+    }
 
     // 在MardownView的扩展菜单加一个转为Reading模式的选项
     registerReadingToggle = () => {
@@ -722,14 +773,13 @@ export default class LanguageLearner extends Plugin {
                 onPaneMenu(next) {
                     return function (m: Menu) {
                         const file = this.file;
-                        const cache = file.cache
-                            ? pluginSelf.app.metadataCache.getFileCache(file)
+                        // TFile 上没有 cache 属性，且 file 可能为 null，
+                        // 判空后从 metadataCache 取 frontmatter
+                        const frontmatter = file
+                            ? pluginSelf.app.metadataCache.getFileCache(file)?.frontmatter
                             : null;
 
-                        if (!file ||
-                            !cache?.frontmatter ||
-                            !cache?.frontmatter[FRONT_MATTER_KEY]
-                        ) {
+                        if (!file || !frontmatter || !frontmatter[FRONT_MATTER_KEY]) {
                             return next.call(this, m);
                         }
 
@@ -737,10 +787,12 @@ export default class LanguageLearner extends Plugin {
                             item.setTitle(t("Open as Reading View"))
                                 .setIcon(READING_ICON)
                                 .onClick(async () => {
-                                    processContent();
-                                    await pluginSelf.setReadingView(this.leaf);
-                                    await fetchData();
-                                    processContent();
+                                    const leaf = this.leaf;
+                                    // 作用域收窄到当前视图，避免命中其他 leaf 的 .text-area
+                                    processContent(this.contentEl);
+                                    await pluginSelf.setReadingView(leaf);
+                                    await fetchData(leaf.view.contentEl).catch((): undefined => undefined);
+                                    processContent(leaf.view.contentEl);
                                 });
 
                         });
@@ -761,22 +813,31 @@ export default class LanguageLearner extends Plugin {
                                 const cache = pluginSelf.app.metadataCache
                                     .getCache(state.state.file);
                                 if (cache?.frontmatter && cache.frontmatter[FRONT_MATTER_KEY]) {
-                                    if (!pluginSelf.markdownButtons["reading"]) {
+                                    // 按 leaf 记录按钮；旧视图销毁后按钮 DOM 已移除，记录会残留成死引用，需重建
+                                    let button = pluginSelf.markdownReadingButtons.get(this);
+                                    if (button && !button.isConnected) {
+                                        pluginSelf.markdownReadingButtons.delete(this);
+                                        pluginSelf.markdownReadingButtonEls.delete(button);
+                                        button = undefined;
+                                    }
+                                    if (!button) {
                                         // 检查 addAction 方法是否存在
                                         const view = this.view as MarkdownView;
                                         if (typeof view.addAction === 'function') {
-                                            pluginSelf.markdownButtons["reading"] =
-                                                view.addAction(
-                                                    "view",
-                                                    t("Open as Reading View"),
-                                                    async () => {
-                                                        processContent();
-                                                        await pluginSelf.setReadingView(this);
-                                                        await fetchData();
-                                                        processContent();
-                                                    }
-                                                );
-                                            pluginSelf.markdownButtons["reading"].addClass("change-to-reading");
+                                            button = view.addAction(
+                                                "view",
+                                                t("Open as Reading View"),
+                                                async () => {
+                                                    // 作用域收窄到当前视图，避免命中其他 leaf 的 .text-area
+                                                    processContent((this.view as MarkdownView).contentEl);
+                                                    await pluginSelf.setReadingView(this);
+                                                    await fetchData(this.view.contentEl).catch((): undefined => undefined);
+                                                    processContent(this.view.contentEl);
+                                                }
+                                            );
+                                            button.addClass("change-to-reading");
+                                            pluginSelf.markdownReadingButtons.set(this, button);
+                                            pluginSelf.markdownReadingButtonEls.add(button);
                                         }
                                     }
                                 } else {
@@ -785,11 +846,18 @@ export default class LanguageLearner extends Plugin {
                                         actionsEl.querySelectorAll(".change-to-reading")
                                             .forEach((el: HTMLElement) => el.remove());
                                     }
-                                    // pluginSelf.markdownButtons["reading"]?.remove();
-                                    pluginSelf.markdownButtons["reading"] = null;
+                                    const tracked = pluginSelf.markdownReadingButtons.get(this);
+                                    if (tracked) {
+                                        pluginSelf.markdownReadingButtonEls.delete(tracked);
+                                    }
+                                    pluginSelf.markdownReadingButtons.delete(this);
                                 }
                             } else {
-                                pluginSelf.markdownButtons["reading"] = null;
+                                const tracked = pluginSelf.markdownReadingButtons.get(this);
+                                if (tracked) {
+                                    pluginSelf.markdownReadingButtonEls.delete(tracked);
+                                }
+                                pluginSelf.markdownReadingButtons.delete(this);
                             }
                         });
                     };
@@ -1302,7 +1370,7 @@ export default class LanguageLearner extends Plugin {
                 "editor-menu",
                 (menu: Menu, editor: Editor, view: MarkdownView) => {
                     let selection = editor.getSelection();
-                    if (selection || selection.trim().length === selection.length) {
+                    if (selection && selection.trim()) {
                         addMemu(menu, selection);
                     }
                 }
@@ -1377,23 +1445,38 @@ export default class LanguageLearner extends Plugin {
     }
 
     async activateView(VIEW_TYPE: string, side: "left" | "right" | "tab") {
-        if (this.app.workspace.getLeavesOfType(VIEW_TYPE).length === 0) {
-            let leaf;
-            switch (side) {
-                case "left":
-                    leaf = this.app.workspace.getLeftLeaf(false);
-                    break;
-                case "right":
-                    leaf = this.app.workspace.getRightLeaf(false);
-                    break;
-                case "tab":
-                    leaf = this.app.workspace.getLeaf("tab");
-                    break;
+        // 「检查叶子数后 await setViewState」需要互斥：
+        // 并发调用（如两次带句子的划词连发）会各自创建面板 leaf，出现重复面板
+        const running = this.activateViewTasks.get(VIEW_TYPE);
+        if (!running) {
+            const task = (async () => {
+                if (this.app.workspace.getLeavesOfType(VIEW_TYPE).length === 0) {
+                    let leaf;
+                    switch (side) {
+                        case "left":
+                            leaf = this.app.workspace.getLeftLeaf(false);
+                            break;
+                        case "right":
+                            leaf = this.app.workspace.getRightLeaf(false);
+                            break;
+                        case "tab":
+                            leaf = this.app.workspace.getLeaf("tab");
+                            break;
+                    }
+                    await leaf.setViewState({
+                        type: VIEW_TYPE,
+                        active: true,
+                    });
+                }
+            })();
+            this.activateViewTasks.set(VIEW_TYPE, task);
+            try {
+                await task;
+            } finally {
+                this.activateViewTasks.delete(VIEW_TYPE);
             }
-            await leaf.setViewState({
-                type: VIEW_TYPE,
-                active: true,
-            });
+        } else {
+            await running;
         }
         this.app.workspace.revealLeaf(
             this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]
@@ -1402,11 +1485,21 @@ export default class LanguageLearner extends Plugin {
 
 
     async checkPath() {
-        if (this.settings.word_folder && this.settings.use_fileDB) {
+        // 运行时 provider 由 only_fileDB 决定：仅开 only_fileDB 而关 use_fileDB 时
+        // 也必须创建 word_folder，否则 FileDb 的 adapter.list 读取路径会 ENOENT；
+        // use_fileDB 开启时 updateWordfiles 同样需要该目录
+        if (this.settings.word_folder && (this.settings.use_fileDB || this.settings.only_fileDB)) {
             try {
                 await app.vault.createFolder(this.settings.word_folder);
             } catch (err) { };
         }
+    }
+
+    //文件名里的非法字符统一替换为下划线，避免 vault.create 失败或路径逃逸；
+    //词条真实拼写保存在 frontmatter 的 expression 键中，不依赖文件名
+    private sanitizeWordFileName(expression: string): string {
+        const sanitized = expression.replace(/[\\/:*?"<>|#^[\]]/g, "_").trim();
+        return sanitized || "_";
     }
 
     async createWordfiles(words: string[]) {
@@ -1425,12 +1518,13 @@ export default class LanguageLearner extends Plugin {
                     }
                 });
             });
-        //this.createMd(exprs,this.plugin.settings.word_folder,cont); 
+        //this.createMd(exprs,this.plugin.settings.word_folder,cont);
         for (const str of words) {
+            const fileName = `${this.sanitizeWordFileName(str)}.md`;
             if (path[path.length - 1] === '/') {
-                var filePath = path + `${str}.md`;
+                var filePath = path + fileName;
             } else {
-                var filePath = path + '/' + `${str}.md`;
+                var filePath = path + '/' + fileName;
             }
             const expressionInfo = infoMap.get(str.toLowerCase());
             if (!expressionInfo) {
@@ -1496,10 +1590,7 @@ export default class LanguageLearner extends Plugin {
             .filter(item => item.status === 0)
             .flatMap(item => [item.expression, ...item.aliases]);
 
-        await this.db.destroyAll();
-        await this.db.open();
-
-        // 分批处理，避免阻塞 UI
+        // 分批处理，避免阻塞 UI；先完成全部解析再去动旧库，解析失败时旧数据仍在
         let expressionInfos: ExpressionInfo[] = [];
         const batchSize = 50;
         let processed = 0;
@@ -1532,28 +1623,69 @@ export default class LanguageLearner extends Plugin {
 
             processed += batch.length;
             notice.setMessage(`${t("Syncing database")} (${processed}/${total})...`);
-            
+
             // 让出主线程，避免 UI 卡顿
             await new Promise(r => setTimeout(r, 0));
         }
 
-        notice.setMessage(`${t("Writing database")}...`);
-
-        if (expressionInfos.length > 0) {
-            if (this.db instanceof LocalDb) {
-                await this.db.bulkPostExpressions(expressionInfos);
-            } else {
-                // Fallback for FileDb or other providers if they don't support bulk
-                for (const info of expressionInfos) {
-                    await this.db.postExpression(info);
-                }
+        // expressions 表有 &expression 唯一索引：按小写去重，
+        // 避免 bulkAdd 抛 BulkError 中断后续流程
+        const dedupedInfos: ExpressionInfo[] = [];
+        const seenExpressions = new Set<string>();
+        for (const info of expressionInfos) {
+            if (!seenExpressions.has(info.expression)) {
+                seenExpressions.add(info.expression);
+                dedupedInfos.push(info);
             }
         }
 
-        this.db.postIgnoreWords(ignorwords.filter(item => item !== ""));
-        
-        notice.hide();
-        new Notice(`${t("Sync complete")}: ${expressionInfos.length}`);
+        notice.setMessage(`${t("Writing database")}...`);
+
+        try {
+            await this.db.destroyAll();
+            await this.db.open();
+
+            if (dedupedInfos.length > 0) {
+                if (this.db instanceof LocalDb) {
+                    await this.db.bulkPostExpressions(dedupedInfos);
+                } else {
+                    // Fallback for FileDb or other providers if they don't support bulk
+                    for (const info of dedupedInfos) {
+                        await this.db.postExpression(info);
+                    }
+                }
+            }
+
+            await this.db.postIgnoreWords(ignorwords.filter(item => item !== ""));
+
+            new Notice(`${t("Sync complete")}: ${dedupedInfos.length}`);
+        } catch (e) {
+            console.error("Failed to update indexDB:", e);
+            new Notice(`Update indexDB failed: ${(e as Error)?.message || e}`);
+        } finally {
+            notice.hide();
+        }
+    }
+
+    //词条 date 的读取侧解析：写入侧（createFM / formatUnixTimestamp）按本地时区
+    //格式化 'YYYY-MM-DD HH:mm:ss'，这里同样按本地时区解析，消除往返偏移；
+    //缺失或非法时回退文件 mtime，避免 NaN 日期把词条挤出 review.md 与七日统计
+    private parseWordFileDate(value: unknown, filePath: string): number {
+        if (value instanceof Date && moment(value).isValid()) {
+            return moment(value).unix();
+        }
+        if (typeof value === "string" && value.trim()) {
+            const formatted = moment(value, "YYYY-MM-DD HH:mm:ss");
+            if (formatted.isValid()) {
+                return formatted.unix();
+            }
+            const generic = moment(value);
+            if (generic.isValid()) {
+                return generic.unix();
+            }
+        }
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        return file instanceof TFile ? Math.floor(file.stat.mtime / 1000) : 0;
     }
 
     //解析某个单词文件的fm信息
@@ -1602,7 +1734,7 @@ export default class LanguageLearner extends Plugin {
             tags: normalizedTags,
             notes: normalizedNotes,
             aliases: normalizedAliases,
-            date: moment.utc(date).unix(),
+            date: this.parseWordFileDate(date, file_path),
             sentences: sentences,
         }
         const nextReview = normalizeNextReview((fm as Record<string, unknown>)["下次复习"]);
@@ -1626,7 +1758,10 @@ export default class LanguageLearner extends Plugin {
         if (!this.parserAllFMDirty && this.parserAllFMCache) {
             return this.parserAllFMCache;
         }
-        this.checkPath();
+        // 代际计数：遍历期间若发生缓存失效（词文件变更 / notifyWordStorageChanged），
+        // 不把不含最新修改的快照写回缓存，避免旧快照被重新标记为有效
+        const generation = this.parserAllFMGeneration;
+        await this.checkPath();
         var filesPath = (await this.app.vault.adapter.list(normalizePath(this.settings.word_folder))).files;
         var wordsinfo: ExpressionInfo[] = [];
         for (var filepath of filesPath) {
@@ -1635,8 +1770,10 @@ export default class LanguageLearner extends Plugin {
                 wordsinfo.push(expressioninfo);
             }
         }
-        this.parserAllFMCache = wordsinfo;
-        this.parserAllFMDirty = false;
+        if (generation === this.parserAllFMGeneration) {
+            this.parserAllFMCache = wordsinfo;
+            this.parserAllFMDirty = false;
+        }
         return wordsinfo;
     }
 
@@ -1682,10 +1819,12 @@ export default class LanguageLearner extends Plugin {
 
 
 
-export function processContent() {
-    // 获取包含特定class的元素
+export function processContent(scope?: ParentNode) {
+    // 获取包含特定class的元素；优先在指定视图容器内查找，
+    // 避免全局 document.querySelector 命中其他 leaf 的 .text-area
 
-    let textArea = document.querySelector('.text-area');
+    const root: ParentNode = scope || document;
+    let textArea = root.querySelector('.text-area');
 
     if (textArea) {
         let htmlContent = textArea.innerHTML;
@@ -1743,7 +1882,7 @@ export function processContent() {
         textArea.innerHTML = htmlContent;
     } else {
         // 查找页面中的 img 元素并提取 imgnum 并存储到 localStorage 中
-        var imgElements = document.getElementsByTagName('img');
+        var imgElements = root.querySelectorAll('img');
         for (var i = 0; i < imgElements.length; i++) {
             if (imgElements[i].getAttribute('src')) {
                 imgnum = imgElements[i].getAttribute('src');
@@ -1774,28 +1913,34 @@ function mergeStrings(str1: string, str2: string) {
     }
 }
 
-async function fetchData() {
-    let previousContent = ''; // 上一次抓取到的内容
-    return new Promise((resolve, reject) => {
-        let intervalId = setInterval(() => {
-            let textArea = document.querySelector('.text-area');
+async function fetchData(scope: ParentNode) {
+    const POLL_INTERVAL = 100;
+    const MAX_ATTEMPTS = 100; // 约 10s 上限，避免 article 永不出现时定时器常驻泄漏
+    return new Promise<string>((resolve, reject) => {
+        let attempts = 0;
+        let intervalId = window.setInterval(() => {
+            attempts += 1;
+            const textArea = scope.querySelector('.text-area');
 
             if (textArea) {
-                let currentContent = textArea.innerHTML.trim();
-
                 // 检查 textArea 中是否包含 class 为 'article' 的元素
-                let hasArticleClass = textArea.querySelector('.article') !== null;
-
-                if (hasArticleClass) {
-                    clearInterval(intervalId); // 内容无变化时清除定时器
-                    resolve(currentContent); // 解析 Promise，传递最终内容
-                } else {
-                    previousContent = currentContent; // 更新上一次抓取的内容
+                if (textArea.querySelector('.article') !== null) {
+                    clearInterval(intervalId);
+                    resolve(textArea.innerHTML.trim());
+                    return;
                 }
-            } else {
-                clearInterval(intervalId); // 内容无变化时清除定时器
-                console.warn('.text-area element not found');
             }
-        }, 100);
+
+            if (attempts >= MAX_ATTEMPTS) {
+                clearInterval(intervalId);
+                if (textArea) {
+                    // article 迟迟未渲染（如空的 ^^^article 分节），按现有内容结束
+                    resolve(textArea.innerHTML.trim());
+                } else {
+                    console.warn('.text-area element not found');
+                    reject(new Error('.text-area element not found'));
+                }
+            }
+        }, POLL_INTERVAL);
     });
 }

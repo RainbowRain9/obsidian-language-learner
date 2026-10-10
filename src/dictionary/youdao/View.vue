@@ -25,6 +25,7 @@ import { computed, ref, watch, nextTick } from 'vue'
 import Collins from "./YDCollins.vue"
 import { search, YoudaoResultLex } from "./engine"
 import { useLoading } from "@dict/uses"
+import type { SearchSession } from "@dict/uses"
 import { playAudio } from "@/utils/helpers"
 import { t } from "@/lang/helper"
 
@@ -33,6 +34,7 @@ import { t } from "@/lang/helper"
 
 const props = defineProps<{
     word: string,
+    searchNonce?: number,
 }>()
 
 const emits = defineEmits<{
@@ -55,9 +57,14 @@ const panels = computed(() => ([
     { value: "relatedWords", label: t("Related Words") },
 ]));
 
-async function onSearch(): Promise<boolean> {
+async function onSearch(session: SearchSession): Promise<boolean> {
+    if (!props.word) return false;
     let res = await search(props.word)
     if (!res) {
+        return false;
+    }
+    // 慢的旧请求晚到时不再写回，避免覆盖新查询的结果
+    if (session.isStale()) {
         return false;
     }
     let result = res.result as YoudaoResultLex;
@@ -74,7 +81,7 @@ async function onSearch(): Promise<boolean> {
     return true;
 }
 
-useLoading(() => props.word, "youdao", onSearch, emits);
+useLoading(() => [props.word, props.searchNonce], "youdao", onSearch, emits);
 
 </script>
 

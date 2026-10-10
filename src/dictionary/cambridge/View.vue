@@ -1,5 +1,5 @@
 <template>
-    <div id="cambridge">
+    <div id="cambridge" ref="rootEl">
         <section v-for="entry in result" :key="entry.id" :id="entry.id" @click="">
             <div v-html="entry.html"></div>
         </section>
@@ -12,9 +12,11 @@ import { Notice } from "obsidian";
 import { ref, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { CambridgeResult, search } from "./engine";
 import { useLoading } from "@dict/uses"
+import type { SearchSession } from "@dict/uses"
 
 const props = defineProps<{
     word: string;
+    searchNonce?: number;
 }>();
 
 const emits = defineEmits<{
@@ -22,32 +24,39 @@ const emits = defineEmits<{
 }>();
 
 let result = ref<CambridgeResult>([]);
+const rootEl = ref<HTMLElement | null>(null);
 
-async function onSearch(): Promise<boolean> {
+async function onSearch(session: SearchSession): Promise<boolean> {
+    if (!props.word) return false;
     let res = await search(props.word);
     if (!res) return false;
+    // 慢的旧请求晚到时不再写回，避免覆盖新查询的结果
+    if (session.isStale()) return false;
 
     result.value = res.result;
     await nextTick();
     return true;
 }
 
-useLoading(() => props.word, "cambridge", onSearch, emits);
+useLoading(() => [props.word, props.searchNonce], "cambridge", onSearch, emits);
+
+// 管理“更多范例”的展开和折叠（绑在组件自身根元素上，侧栏与弹窗双实例互不干扰）
+function onHeaderClick(evt: Event) {
+    let target = evt.target as HTMLElement;
+    if (target.tagName === "HEADER" && target.hasClass("ca_h") || target.matchParent("header.ca_h")) {
+        let section = target.matchParent("section");
+        section.hasClass("expand") ?
+            section.removeClass("expand") :
+            section.addClass("expand");
+    }
+}
 
 onMounted(() => {
-    let cam = document.querySelector("#cambridge");
-    if (!cam) return;
-    // 管理“更多范例”的展开和折叠
-    cam.addEventListener("click", (evt) => {
-        let target = evt.target as HTMLElement;
-        // console.log(target)
-        if (target.tagName === "HEADER" && target.hasClass("ca_h") || target.matchParent("header.ca_h")) {
-            let section = target.matchParent("section");
-            section.hasClass("expand") ?
-                section.removeClass("expand") :
-                section.addClass("expand");
-        }
-    });
+    rootEl.value?.addEventListener("click", onHeaderClick);
+})
+
+onUnmounted(() => {
+    rootEl.value?.removeEventListener("click", onHeaderClick);
 })
 
 </script>

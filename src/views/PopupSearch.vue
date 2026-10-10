@@ -16,7 +16,7 @@
 </template>
 
 <script setup lang='ts'>
-import { ref, watch } from 'vue';
+import { ref, watch, onUnmounted } from 'vue';
 import { useDraggable } from "@vueuse/core";
 import store from "@/store";
 import SearchPanel from "./SearchPanel.vue";
@@ -58,6 +58,12 @@ function pin() {
     }
     window.getSelection().collapseToStart();
 }
+
+onUnmounted(() => {
+    // 组件卸载（如关闭 popup_search 设置）时复位 pin 状态，
+    // 避免残留的 searchPinned=true 永久绕过功能键限制
+    store.searchPinned = false;
+});
 
 defineExpose({
     pinned

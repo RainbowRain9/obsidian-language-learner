@@ -168,20 +168,14 @@ function handleDOM(
 
     //   if (result.length <= 0 && options.related) {
     if (result.length <= 0 && true) {
-        const $link = doc.querySelector('link[rel=canonical]');
-        if (
-            $link &&
-            /dictionary\.cambridge\.org\/([^/]+\/)?spellcheck\//.test(
-                $link.getAttribute('href') || ''
-            )
-        ) {
-            const $related = doc.querySelector('.hfl-s.lt2b.lmt-10.lmb-25.lp-s_r-20');
-            if ($related) {
-                result.push({
-                    id: 'd-cambridge-entry-related',
-                    html: getInnerHTML(HOST, $related)
-                });
-            }
+        // 线上 spellcheck 页面已不再输出 link[rel=canonical]（2026-10 实测），
+        // 改为直接以拼写建议容器是否存在判定
+        const $related = doc.querySelector('.hfl-s.lt2b.lmt-10.lmb-25.lp-s_r-20');
+        if ($related) {
+            result.push({
+                id: 'd-cambridge-entry-related',
+                html: getInnerHTML(HOST, $related)
+            });
         }
     }
 

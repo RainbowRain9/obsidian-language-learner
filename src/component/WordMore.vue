@@ -28,6 +28,7 @@
 import { ref, getCurrentInstance } from 'vue';
 import PluginType from "@/plugin";
 import { t } from "@/lang/helper";
+import { escapeHtml } from "@/utils/helpers";
 
 const plugin = getCurrentInstance().appContext.config.globalProperties.plugin as PluginType;
 
@@ -35,15 +36,23 @@ const props = defineProps<{
     word: string;
 }>();
 
-let { sentences, notes } = await plugin.db.getExpression(props.word);
+// 两个数据库实现查不到词条时都返回 null（DataPanel 数据是加载时快照，词条可能已被删除）
+let exprInfo = await plugin.db.getExpression(props.word);
+let sentences = exprInfo?.sentences ?? [];
+let notes = exprInfo?.notes ?? [];
 
 sentences.forEach((_, i) => {
-    sentences[i].text = highlight(sentences[i].text, props.word);
+    // 例句内容可能来自网页/外部翻译接口，先整体 HTML 转义再注入 <em> 高亮，
+    // 防止保留字符被浏览器当标签解析（v-html 存储型注入）
+    sentences[i].text = highlight(escapeHtml(sentences[i].text ?? ""), props.word);
+    sentences[i].trans = escapeHtml(sentences[i].trans ?? "");
+    sentences[i].origin = escapeHtml(sentences[i].origin ?? "");
 });
 
 function highlight(text: string, word: string) {
-    const expr = word.toLowerCase();
-    const Expr = word[0].toUpperCase() + word.slice(1);
+    // 查找词同样转义，保证在转义后的文本中匹配一致（如词中含 & 时匹配 &amp;）
+    const expr = escapeHtml(word.toLowerCase());
+    const Expr = escapeHtml(word[0].toUpperCase() + word.slice(1));
     text = text.replace(expr, `<em>${expr}</em>`);
     text = text.replace(Expr, `<em>${Expr}</em>`);
     return text;

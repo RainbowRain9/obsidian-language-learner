@@ -69,10 +69,14 @@ type AIAutofillResult = {
 type RequestChatOptions = {
     scenario: AIScenario;
     cacheKey?: string;
+    /** Scenario-level fallback, applied only when the model has no explicit Max Output Tokens setting. */
     maxTokens?: number;
+    /** Scenario-level fallback, applied only when the model has no explicit Temperature setting. */
     temperature?: number;
     topP?: number;
     modelIdOverride?: string;
+    /** Resolve modelIdOverride even if that model or its provider is disabled (used by Test Connection). */
+    allowDisabledModel?: boolean;
     hasContext?: boolean;
     bypassCache?: boolean;
 };
@@ -198,6 +202,17 @@ function formatAIError(status: number, responseText?: string): string {
     if (status === 429) return `${t("Too many requests (429). Please try again later")}${trimmed ? `\n${trimmed}` : ""}`;
     if (status >= 500 && status <= 599) return `${t("Server error. Please try again later")} (${status})${trimmed ? `\n${trimmed}` : ""}`;
     return `${t("AI API error")} (${status})${trimmed ? `: ${trimmed}` : ""}`;
+}
+
+/**
+ * Marks errors raised from an actual API response (non-2xx status or unusable body),
+ * so the retry loop can tell them apart from client-side network failures.
+ */
+class AIAPIError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "AIAPIError";
+    }
 }
 
 function normalizeStringList(value: unknown, separator = /[\n,，;；]+/): string[] {
@@ -487,6 +502,16 @@ function applyCustomParameters(body: Record<string, unknown>, parameters: AICust
     });
 }
 
+function resolveEffectiveGenerationParams(
+    model: AIModelConfig,
+    options: Pick<RequestChatOptions, "maxTokens" | "temperature">
+): { maxTokens: number; temperature: number } {
+    return {
+        maxTokens: model.maxOutputTokens ?? options.maxTokens ?? 200,
+        temperature: model.temperature ?? options.temperature ?? 0.3,
+    };
+}
+
 function buildRequestConfig(
     settings: AISettingsLike,
     messages: ChatMessage[],
@@ -495,15 +520,17 @@ function buildRequestConfig(
     const resolved = resolveAIModelForScenario(settings.ai, options.scenario, {
         modelIdOverride: options.modelIdOverride,
         hasContext: options.hasContext,
+        allowDisabledModel: options.allowDisabledModel,
     });
 
     assertUsableProvider(resolved.provider);
 
+    const generation = resolveEffectiveGenerationParams(resolved.model, options);
     const body: Record<string, unknown> = {
         model: resolved.model.model,
         messages,
-        max_tokens: options.maxTokens ?? resolved.model.maxOutputTokens ?? 200,
-        temperature: options.temperature ?? resolved.model.temperature ?? 0.3,
+        max_tokens: generation.maxTokens,
+        temperature: generation.temperature,
     };
 
     const topP = options.topP ?? resolved.model.topP;
@@ -578,17 +605,31 @@ async function requestChatCompletion(
             });
 
             if (response.status === 200) {
+                let responseJson: unknown;
+                try {
+                    responseJson = response.json;
+                } catch (_parseError) {
+                    const parseErrorMessage = formatAIError(200, response.text);
+                    addAIDebugLog(requestConfig, options, {
+                        phase: "error",
+                        attempt,
+                        status: response.status,
+                        responseText: truncateDebugValue(response.text),
+                        errorMessage: parseErrorMessage,
+                    });
+                    throw new AIAPIError(parseErrorMessage);
+                }
                 addAIDebugLog(requestConfig, options, {
                     phase: "response",
                     attempt,
                     status: response.status,
-                    responseJson: response.json,
-                    responseText: truncateDebugValue(response.json),
+                    responseJson,
+                    responseText: truncateDebugValue(responseJson),
                 });
                 if (options.cacheKey && !options.bypassCache) {
-                    queryCache.set(options.cacheKey, response.json);
+                    queryCache.set(options.cacheKey, responseJson);
                 }
-                return response.json as ChatCompletionResponse;
+                return responseJson as ChatCompletionResponse;
             }
 
             lastStatus = response.status;
@@ -603,35 +644,29 @@ async function requestChatCompletion(
 
             const shouldRetry = isRetryableStatus(response.status) && attempt < maxRetries;
             if (!shouldRetry) {
-                throw new Error(formatAIError(response.status, response.text));
+                throw new AIAPIError(formatAIError(response.status, response.text));
             }
-        } catch (e: any) {
-            if (e.message && !e.message.includes("API")) {
-                lastText = e.message;
-                addAIDebugLog(requestConfig, options, {
-                    phase: "error",
-                    attempt,
-                    status: lastStatus ?? undefined,
-                    responseText: truncateDebugValue(lastText),
-                    errorMessage: e.message,
-                });
-                if (attempt >= maxRetries) {
-                    throw new Error(`${t("Network request failed")}: ${e.message}`);
-                }
-            } else {
-                addAIDebugLog(requestConfig, options, {
-                    phase: "error",
-                    attempt,
-                    status: lastStatus ?? undefined,
-                    responseText: truncateDebugValue(lastText),
-                    errorMessage: e?.message || String(e),
-                });
+        } catch (e) {
+            if (e instanceof AIAPIError) {
+                // Already logged where the API response was handled; rethrow without a duplicate entry.
                 throw e;
+            }
+            const networkMessage = e instanceof Error && e.message ? e.message : String(e);
+            lastText = networkMessage;
+            addAIDebugLog(requestConfig, options, {
+                phase: "error",
+                attempt,
+                status: lastStatus ?? undefined,
+                responseText: truncateDebugValue(networkMessage),
+                errorMessage: networkMessage,
+            });
+            if (attempt >= maxRetries) {
+                throw new Error(`${t("Network request failed")}: ${networkMessage}`);
             }
         }
     }
 
-    throw new Error(formatAIError(lastStatus ?? 0, lastText));
+    throw new AIAPIError(formatAIError(lastStatus ?? 0, lastText));
 }
 
 function buildContextualSearchMessages(
@@ -725,6 +760,13 @@ export async function search(
         hasContext: !!context?.sentenceText,
     });
     const messages = buildContextualSearchMessages(text, resolved.prompt, context);
+    const requestOptions: RequestChatOptions = {
+        scenario: "search",
+        hasContext: !!context?.sentenceText,
+        maxTokens: context?.sentenceText ? 280 : 200,
+        temperature: 0.3,
+    };
+    const generation = resolveEffectiveGenerationParams(resolved.model, requestOptions);
     const cacheKey = buildCacheKey("search", {
         scenario: "search",
         text,
@@ -732,9 +774,9 @@ export async function search(
         modelId: resolved.model.id,
         model: resolved.model.model,
         prompt: resolved.prompt,
-        temperature: resolved.model.temperature ?? 0.3,
+        temperature: generation.temperature,
         topP: resolved.model.topP ?? null,
-        maxOutputTokens: resolved.model.maxOutputTokens ?? (context?.sentenceText ? 280 : 200),
+        maxOutputTokens: generation.maxTokens,
         reasoning: resolved.model.reasoning,
         thinking: resolved.model.thinking,
         customParameters: resolved.model.customParameters,
@@ -744,41 +786,29 @@ export async function search(
         foreignLanguage: context?.foreignLanguage || "",
     });
 
-    return requestChatCompletion(settings, messages, {
-        scenario: "search",
-        cacheKey,
-        hasContext: !!context?.sentenceText,
-        maxTokens: context?.sentenceText ? 280 : 200,
-        temperature: 0.3,
-    });
+    return requestChatCompletion(settings, messages, { ...requestOptions, cacheKey });
 }
 
 export async function translate(text: string, settings: AISettingsLike): Promise<string> {
     const resolved = resolveAIModelForScenario(settings.ai, "translate");
-    const finalPrompt = resolved.prompt.replace("{sentence}", text);
-    const response = await requestChatCompletion(settings, [
-        { role: "user", content: finalPrompt },
-    ], {
+    // Function form: text may contain "$&"/"$'"/"$$" which a string replacement would interpret.
+    const finalPrompt = resolved.prompt.replace("{sentence}", () => text);
+    const requestOptions: RequestChatOptions = {
         scenario: "translate",
         maxTokens: 150,
         temperature: 0.3,
-    });
+    };
+    const response = await requestChatCompletion(settings, [
+        { role: "user", content: finalPrompt },
+    ], requestOptions);
 
     const content = extractResponseContent(response);
     if (!content) {
         const emptyContentError = createEmptyContentErrorForResponse("translate", response);
         const requestConfig = buildRequestConfig(settings, [
             { role: "user", content: finalPrompt },
-        ], {
-            scenario: "translate",
-            maxTokens: 150,
-            temperature: 0.3,
-        });
-        addAIDebugLog(requestConfig, {
-            scenario: "translate",
-            maxTokens: 150,
-            temperature: 0.3,
-        }, {
+        ], requestOptions);
+        addAIDebugLog(requestConfig, requestOptions, {
             phase: "empty-response",
             responseJson: response,
             responseText: truncateDebugValue(response),
@@ -796,6 +826,12 @@ export async function autofillExpression(
 ): Promise<AIAutofillResult> {
     const resolved = resolveAIModelForScenario(settings.ai, "card");
     const messages = buildAutofillMessages(input, resolved.prompt);
+    const requestOptions: RequestChatOptions = {
+        scenario: "card",
+        maxTokens: DEFAULT_CARD_MAX_TOKENS,
+        temperature: 0.2,
+    };
+    const generation = resolveEffectiveGenerationParams(resolved.model, requestOptions);
     const cacheKey = buildCacheKey("card-autofill", {
         scenario: "card",
         providerId: resolved.provider.id,
@@ -814,35 +850,23 @@ export async function autofillExpression(
         foreignLanguage: input.foreignLanguage || "",
         requestedFields: (input.requestedFields || []).join("|"),
         prompt: resolved.prompt,
-        temperature: resolved.model.temperature ?? 0.2,
+        temperature: generation.temperature,
         topP: resolved.model.topP ?? null,
-        maxOutputTokens: resolved.model.maxOutputTokens ?? DEFAULT_CARD_MAX_TOKENS,
+        maxOutputTokens: generation.maxTokens,
         reasoning: resolved.model.reasoning,
         thinking: resolved.model.thinking,
         customParameters: resolved.model.customParameters,
     });
 
-    const response = await requestChatCompletion(settings, messages, {
-        scenario: "card",
-        cacheKey,
-        maxTokens: DEFAULT_CARD_MAX_TOKENS,
-        temperature: 0.2,
-    });
+    const response = await requestChatCompletion(settings, messages, { ...requestOptions, cacheKey });
 
     const content = extractResponseContent(response);
     if (!content) {
         const emptyContentError = createEmptyContentErrorForResponse("card", response);
-        const requestConfig = buildRequestConfig(settings, messages, {
-            scenario: "card",
-            cacheKey,
-            maxTokens: DEFAULT_CARD_MAX_TOKENS,
-            temperature: 0.2,
-        });
+        const requestConfig = buildRequestConfig(settings, messages, { ...requestOptions, cacheKey });
         addAIDebugLog(requestConfig, {
-            scenario: "card",
+            ...requestOptions,
             cacheKey,
-            maxTokens: DEFAULT_CARD_MAX_TOKENS,
-            temperature: 0.2,
         }, {
             phase: "empty-response",
             responseJson: response,
@@ -864,8 +888,7 @@ export async function testModelConnection(
     ], {
         scenario: "search",
         modelIdOverride: modelId,
-        maxTokens: 5,
-        temperature: 0,
+        allowDisabledModel: true,
         bypassCache: true,
     });
 }

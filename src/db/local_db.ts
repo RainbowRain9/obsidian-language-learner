@@ -12,6 +12,13 @@ import { WordDB, Expression } from "./idb";
 import Plugin from "@/plugin";
 import { t } from "@/lang/helper";
 
+// 保留调用方携带的日期：毫秒时间戳归一为秒（LearnPanel 传 Date.now()），NaN/缺失回退当前时间
+// （updateIndexDB 经 parserFM 解析的 date 在文件缺 date 键时为 NaN，不能写入库）
+function preserveDate(date: number | undefined): number {
+    if (!Number.isFinite(date)) return moment().unix();
+    return date > 1e12 ? Math.floor(date / 1000) : date;
+}
+
 
 export class LocalDb extends DbProvider {
     idb: WordDB;
@@ -20,9 +27,12 @@ export class LocalDb extends DbProvider {
     private phraseAutomaton: Automaton | null = null;
     private phraseCacheTime = 0;
     private readonly PHRASE_CACHE_TTL = 300000;
+    // 缓存代数：invalidate 时递增，用于识别重建期间是否又发生了失效
+    private phraseCacheGeneration = 0;
     private expressionsSimpleCache: Map<string, { ts: number; data: ExpressionInfoSimple[] }> = new Map();
     private readonly EXPRESSIONS_SIMPLE_TTL = 30000;
     private readonly EXPRESSIONS_SIMPLE_MAX = 50;
+    private expressionsSimpleGeneration = 0;
     constructor(plugin: Plugin) {
         super();
         this.plugin = plugin;
@@ -34,20 +44,26 @@ export class LocalDb extends DbProvider {
         if (this.phraseCache && (now - this.phraseCacheTime) < this.PHRASE_CACHE_TTL) {
             return this.phraseCache;
         }
+        // 记录重建前的代数：若重建期间发生失效（invalidate 递增代数），
+        // 不把基于旧数据的 Map 回写为缓存，避免 invalidate 效果被覆盖
+        const generation = this.phraseCacheGeneration;
         const phraseMap = new Map<string, number>();
         await this.idb.expressions
             .where("t").equals("PHRASE")
             .each(expr => {
-                phraseMap.set(expr.expression, expr.status);
+                // 键统一小写：ac 自动机匹配的文本是小写文章，键保留原大小写会永不命中
+                phraseMap.set(expr.expression.toLowerCase(), expr.status);
                 if (expr.aliases) {
                     for (let item of expr.aliases) {
-                        phraseMap.set(item, expr.status);
+                        phraseMap.set(item.toLowerCase(), expr.status);
                     }
                 }
             });
-        this.phraseCache = phraseMap;
-        this.phraseCacheTime = now;
-        this.phraseAutomaton = null;
+        if (generation === this.phraseCacheGeneration) {
+            this.phraseCache = phraseMap;
+            this.phraseCacheTime = now;
+            this.phraseAutomaton = null;
+        }
         return phraseMap;
     }
 
@@ -63,6 +79,7 @@ export class LocalDb extends DbProvider {
     }
 
     private invalidatePhraseCache() {
+        this.phraseCacheGeneration++;
         this.phraseCache = null;
         this.phraseAutomaton = null;
         this.phraseCacheTime = 0;
@@ -92,6 +109,7 @@ export class LocalDb extends DbProvider {
     }
 
     private invalidateExpressionsSimpleCache() {
+        this.expressionsSimpleGeneration++;
         this.expressionsSimpleCache.clear();
     }
 
@@ -206,6 +224,8 @@ export class LocalDb extends DbProvider {
             return cached;
         }
 
+        // 重建期间发生失效则不回写缓存，避免 invalidate 效果被旧数据覆盖
+        const generation = this.expressionsSimpleGeneration;
         let exprs = await this.idb.expressions
             .where("expression")
             .anyOf(expressions)
@@ -224,7 +244,9 @@ export class LocalDb extends DbProvider {
                 aliases: v.aliases,
             };
         });
-        this.setExpressionsSimpleCache(cacheKey, result);
+        if (generation === this.expressionsSimpleGeneration) {
+            this.setExpressionsSimpleCache(cacheKey, result);
+        }
         return result;
     }
 
@@ -393,7 +415,7 @@ export class LocalDb extends DbProvider {
             sentences,
             tags: new Set<string>(payload.tags),
             aliases: payload.aliases,
-            date: moment().unix()
+            date: preserveDate(payload.date)
         };
         if (stored) {
             await this.idb.expressions.update(stored.id, updatedWord);
@@ -450,7 +472,7 @@ export class LocalDb extends DbProvider {
                 sentences: sentenceIds,
                 tags: new Set<string>(payload.tags),
                 aliases: payload.aliases,
-                date: moment().unix()
+                date: preserveDate(payload.date)
             };
         });
 
@@ -474,9 +496,17 @@ export class LocalDb extends DbProvider {
     }
 
     async postIgnoreWords(payload: string[]): Promise<void> {
+        // 先去重：bulkPut 的项不带主键时等价于 add，重复 expression 会违反 &expression 唯一索引
+        const unique = [...new Set(payload)];
+        if (unique.length === 0) return;
+        // 查出已存在词条的 id 并随 bulkPut 带上主键，实现真正的 upsert（重复 ignore 不再抛 ConstraintError）
+        const existing = await this.idb.expressions
+            .where("expression").anyOf(unique).toArray();
+        const existingIds = new Map(existing.map(expr => [expr.expression, expr.id]));
         await this.idb.expressions.bulkPut(
-            payload.map(expr => {
+            unique.map(expr => {
                 return {
+                    ...(existingIds.has(expr) ? { id: existingIds.get(expr) } : {}),
                     expression: expr,
                     meaning: "",
                     status: 0,
@@ -578,6 +608,10 @@ export class LocalDb extends DbProvider {
         await importInto(this.idb, file, {
             acceptNameDiff: true
         });
+        // 导入即整体换库：显式失效各层缓存，避免 TTL 内继续读到旧词库
+        this.invalidatePhraseCache();
+        this.invalidateExpressionsSimpleCache();
+        this.plugin.notifyWordStorageChanged();
     }
 
     async exportDB() {
@@ -590,7 +624,12 @@ export class LocalDb extends DbProvider {
     }
 
     async destroyAll() {
-        return this.idb.delete();
+        const res = await this.idb.delete();
+        // 清库后显式失效各层缓存，避免 TTL 内继续读到旧词库
+        this.invalidatePhraseCache();
+        this.invalidateExpressionsSimpleCache();
+        this.plugin.notifyWordStorageChanged();
+        return res;
     }
 }
 

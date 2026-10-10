@@ -16,46 +16,69 @@ import DbProvider from "./base";
 import { WordDB, Expression } from "./idb";
 import Plugin from "@/plugin";
 
+// 保留调用方携带的日期：毫秒时间戳归一为秒（LearnPanel 传 Date.now()），NaN/缺失回退当前时间
+// （updateIndexDB 经 parserFM 解析的 date 在文件缺 date 键时为 NaN，不能写入库/文件）
+function preserveDate(date: number | undefined): number {
+    if (!Number.isFinite(date)) return moment().unix();
+    return date > 1e12 ? Math.floor(date / 1000) : date;
+}
+
+// 净化词条 expression 作为文件名：替换文件系统与 Obsidian 的非法字符
+// （含 '/'，避免拼出嵌套子路径导致单词文件永远读不回或创建失败）
+function sanitizeFileName(name: string): string {
+    return name.replace(/[\\/:*?"<>|#^\[\]]/g, "-");
+}
+
 export class FileDb extends DbProvider {
     idb: WordDB;
     plugin: Plugin;
-    
+
     // Alias 缓存优化
     private aliasCache: Map<string, Expression> | null = null;
     private aliasCacheTime: number = 0;
     private readonly ALIAS_CACHE_TTL = 300000; // 5分钟缓存
+    // 缓存代数：invalidate 时递增，用于识别重建期间是否又发生了失效
+    private aliasCacheGeneration = 0;
     private phraseCache: Map<string, number> | null = null;
     private phraseAutomaton: Automaton | null = null;
     private phraseCacheTime = 0;
+    private phraseCacheGeneration = 0;
     private readonly PHRASE_CACHE_TTL = 300000;
-    
+
     constructor(plugin: Plugin) {
         super();
         this.plugin = plugin;
         this.idb = new WordDB(plugin);
     }
-    
+
     // 获取 alias 缓存，避免全表扫描
     private async getAliasCache(): Promise<Map<string, Expression>> {
         const now = Date.now();
         if (this.aliasCache && (now - this.aliasCacheTime) < this.ALIAS_CACHE_TTL) {
             return this.aliasCache;
         }
-        
-        this.aliasCache = new Map();
+
+        // 记录重建前的代数：若重建期间发生失效（invalidate 递增代数），
+        // 不把基于旧数据的 Map 回写为缓存，避免 invalidate 效果被覆盖
+        const generation = this.aliasCacheGeneration;
+        const aliasCache = new Map();
         await this.idb.expressions.each(expr => {
             if (expr.aliases?.length) {
                 expr.aliases.forEach(alias => {
-                    this.aliasCache!.set(alias.toLowerCase(), expr);
+                    aliasCache.set(alias.toLowerCase(), expr);
                 });
             }
         });
-        this.aliasCacheTime = now;
-        return this.aliasCache;
+        if (generation === this.aliasCacheGeneration) {
+            this.aliasCache = aliasCache;
+            this.aliasCacheTime = now;
+        }
+        return aliasCache;
     }
-    
+
     // 清除 alias 缓存（在数据变更时调用）
     public invalidateAliasCache(): void {
+        this.aliasCacheGeneration++;
         this.aliasCache = null;
         this.aliasCacheTime = 0;
     }
@@ -65,14 +88,16 @@ export class FileDb extends DbProvider {
         if (this.phraseCache && (now - this.phraseCacheTime) < this.PHRASE_CACHE_TTL) {
             return this.phraseCache;
         }
+        const generation = this.phraseCacheGeneration;
         const phraseMap = new Map<string, number>();
         await this.idb.expressions
             .where("t").equals("PHRASE")
             .each(expr => {
-                phraseMap.set(expr.expression, expr.status);
+                // 键统一小写：ac 自动机匹配的文本是小写文章，键保留原大小写会永不命中
+                phraseMap.set(expr.expression.toLowerCase(), expr.status);
                 if (expr.aliases) {
                     for (let item of expr.aliases) {
-                        phraseMap.set(item, expr.status);
+                        phraseMap.set(item.toLowerCase(), expr.status);
                     }
                 }
             });
@@ -81,17 +106,19 @@ export class FileDb extends DbProvider {
         wordsinfo
             .filter(word => word.t === "PHRASE")
             .forEach(word => {
-                phraseMap.set(word.expression, word.status);
+                phraseMap.set(word.expression.toLowerCase(), word.status);
                 if (word.aliases) {
                     for (let item of word.aliases) {
-                        phraseMap.set(item, word.status);
+                        phraseMap.set(item.toLowerCase(), word.status);
                     }
                 }
             });
 
-        this.phraseCache = phraseMap;
-        this.phraseCacheTime = now;
-        this.phraseAutomaton = null;
+        if (generation === this.phraseCacheGeneration) {
+            this.phraseCache = phraseMap;
+            this.phraseCacheTime = now;
+            this.phraseAutomaton = null;
+        }
         return phraseMap;
     }
 
@@ -107,6 +134,7 @@ export class FileDb extends DbProvider {
     }
 
     private invalidatePhraseCache(): void {
+        this.phraseCacheGeneration++;
         this.phraseCache = null;
         this.phraseAutomaton = null;
         this.phraseCacheTime = 0;
@@ -379,16 +407,20 @@ export class FileDb extends DbProvider {
         // 清除 alias 缓存，确保新数据生效
         this.invalidateAliasCache();
         this.invalidatePhraseCache();
-        
-        payload.date = moment().unix();
+
+        // 保留词条原日期（迁移/导入场景），不再一律覆盖为当前时间
+        payload.date = preserveDate(payload.date);
         var stored = await this.idb.expressions
             .where("expression").equals(payload.expression)
             .first();
         var path = this.plugin.settings.word_folder;
+        // 文件名净化：expression 含 '/' 会拼出嵌套子路径（目录列举不递归，文件读不回），
+        // 含 Windows 非法字符则 vault.create 直接抛错
+        var safeName = sanitizeFileName(payload.expression);
         if (path[path.length - 1] === '/') {
-            var filePath = path + `${payload.expression}.md`;
+            var filePath = path + `${safeName}.md`;
         } else {
-            var filePath = path + '/' + `${payload.expression}.md`;
+            var filePath = path + '/' + `${safeName}.md`;
         }
         await this.plugin.checkPath();
         if (payload.status) {
@@ -435,7 +467,7 @@ export class FileDb extends DbProvider {
                 sentences,
                 tags: new Set<string>(payload.tags),
                 aliases: payload.aliases,
-                date: moment().unix()
+                date: payload.date
             };
             if (stored) {
                 await this.idb.expressions.update(stored.id, updatedWord);
@@ -470,10 +502,17 @@ export class FileDb extends DbProvider {
     }
 
     async postIgnoreWords(payload: string[]): Promise<void> {
-
+        // 先去重：bulkPut 的项不带主键时等价于 add，重复 expression 会违反 &expression 唯一索引
+        const unique = [...new Set(payload)];
+        if (unique.length === 0) return;
+        // 查出已存在词条的 id 并随 bulkPut 带上主键，实现真正的 upsert（重复 ignore 不再抛 ConstraintError）
+        const existing = await this.idb.expressions
+            .where("expression").anyOf(unique).toArray();
+        const existingIds = new Map(existing.map(expr => [expr.expression, expr.id]));
         await this.idb.expressions.bulkPut(
-            payload.map(expr => {
+            unique.map(expr => {
                 return {
+                    ...(existingIds.has(expr) ? { id: existingIds.get(expr) } : {}),
                     expression: expr,
                     meaning: "",
                     status: 0,
@@ -563,6 +602,10 @@ export class FileDb extends DbProvider {
         await importInto(this.idb, file, {
             acceptNameDiff: true
         });
+        // 导入即整体换库：显式失效各层缓存，避免 TTL 内继续读到旧词库
+        this.invalidateAliasCache();
+        this.invalidatePhraseCache();
+        this.plugin.notifyWordStorageChanged();
     }
 
     async exportDB() {
@@ -575,7 +618,12 @@ export class FileDb extends DbProvider {
     }
 
     async destroyAll() {
-        return this.idb.delete();
+        const res = await this.idb.delete();
+        // 清库后显式失效各层缓存，避免 TTL 内继续读到旧词库
+        this.invalidateAliasCache();
+        this.invalidatePhraseCache();
+        this.plugin.notifyWordStorageChanged();
+        return res;
     }
 }
 

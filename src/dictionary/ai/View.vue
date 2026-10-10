@@ -20,6 +20,7 @@ import { computed, ref, getCurrentInstance } from 'vue';
 import { formatAIDebugLog, getLatestAIDebugLog, search } from './engine';
 import { MarkdownRenderer, Component, Notice } from 'obsidian';
 import { useLoading } from "@dict/uses";
+import type { SearchSession } from "@dict/uses";
 import { t } from '@/lang/helper';
 const tr = (key: string) => t(key as any);
 
@@ -27,6 +28,7 @@ const props = defineProps<{
     word: string;
     sentenceText?: string;
     origin?: string;
+    searchNonce?: number;
 }>();
 
 const emits = defineEmits<{
@@ -40,7 +42,24 @@ const error = ref('');
 const contentContainer = ref<HTMLElement | null>(null);
 const hasContext = computed(() => !!props.sentenceText?.trim());
 
-async function onSearch(): Promise<boolean> {
+// OpenAI 兼容端点可能按规范返回数组形态的 content（各 part.text 拼接），
+// 与 engine 层未导出的 extractResponseContent 保持一致语义
+function normalizeMessageContent(
+    content: string | Array<{ type?: string; text?: string }> | null | undefined
+): string {
+    if (typeof content === 'string') {
+        return content.trim();
+    }
+    if (Array.isArray(content)) {
+        return content
+            .map(part => (typeof part?.text === 'string' ? part.text : ''))
+            .join('')
+            .trim();
+    }
+    return '';
+}
+
+async function onSearch(session: SearchSession): Promise<boolean> {
     if (!props.word) return false;
 
     error.value = '';
@@ -55,7 +74,9 @@ async function onSearch(): Promise<boolean> {
             nativeLanguage: plugin.settings.native,
             foreignLanguage: plugin.settings.foreign,
         });
-        const rawContent = result.choices?.[0]?.message?.content?.trim();
+        // 慢的旧请求晚到时不再写回，避免与新查询的内容同时渲染
+        if (session.isStale()) return false;
+        const rawContent = normalizeMessageContent(result.choices?.[0]?.message?.content);
         if (!rawContent) {
             const latestLog = getLatestAIDebugLog();
             error.value = `${tr("AI dictionary returned empty content")}。\n${tr("Please open AI settings and inspect the latest diagnostic log")}`;
@@ -79,6 +100,9 @@ async function onSearch(): Promise<boolean> {
                 '',
                 new Component()
             );
+            if (session.isStale() && contentContainer.value) {
+                contentContainer.value.innerHTML = '';
+            }
         }
         return true;
     } catch (e: any) {
@@ -98,7 +122,7 @@ async function onSearch(): Promise<boolean> {
     }
 }
 
-useLoading(() => [props.word, props.sentenceText, props.origin], "ai", onSearch, emits);
+useLoading(() => [props.word, props.sentenceText, props.origin, props.searchNonce], "ai", onSearch, emits);
 </script>
 
 <style scoped>

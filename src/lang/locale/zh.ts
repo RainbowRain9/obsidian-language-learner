@@ -62,7 +62,7 @@ export default {
     "Origin (Optional)": "出处(可选)",
     "Expression is empty!": "单词忘输入了吧",
     "It looks more like a PHRASE than a WORD": "这看起来更像是个词组而不是单词",
-    "Meaning is empty": "含义不应为空",
+    "Meaning is empty!": "含义不应为空",
     "Submit": "提交",
 
     // Test.vue
@@ -142,6 +142,8 @@ export default {
     "Use Word Files Database. Automatically write  non-ignored word information from the article into the corresponding word file after exiting reading mode": "启用单词文件库。退出阅读模式后自动将非无视的文章单词信息写入相应单词文件。",
     "Word Files Database Path": "单词文件库路径",
     "Choose a folder as word files for saving": "选择一个文件夹用于存放单词文件。",
+    "Word File template Path": "单词文件模板路径",
+    "Choose a md file as review database for spaced-repetition (optional)": "选择一个md文件作为复习数据库(可选)",
     "update Word Files Database": "更新单词文件库",
     "Import all non-ignored word information from the indexDB database into the corresponding word file": "根据 IndexDB 数据库将每个非无视单词信息写入相应单词文件。",
     "Update IndexDB Database": "更新 IndexDB 数据库",
@@ -160,7 +162,6 @@ export default {
     "Export": "导出",
     "Get all ignores": "获取所有无视单词",
     "Get all non-ignores": "获取所有非无视单词",
-    "Copied to the clipboard": "已复制到剪贴板",
     "Export Word": "导出单词",
     "Export Word and Phrase": "导出单词和短语",
 
@@ -249,6 +250,7 @@ export default {
     "Transcript imported successfully": "字幕导入成功",
     "Media Extended transcript saver is not available": "Media Extended 字幕保存功能不可用",
     "Failed to import transcript file": "导入字幕文件失败",
+    "Failed to import transcript from URL": "导入远程字幕失败",
     "From remote URL": "从远程链接",
     "Transcript linked successfully": "字幕链接成功",
     "From YouTube": "从 YouTube",

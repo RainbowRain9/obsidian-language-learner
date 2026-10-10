@@ -6,6 +6,9 @@ import type { ExpressionInfo } from "@/db/interface";
  * 语义：以现有文件的 frontmatter 为基底，只覆盖本插件管理的白名单键，
  * 其余既有键（例如外部工具写入的「复习次数 / 下次复习 / 复习记录」等未知键）
  * 以及 frontmatter 之后的正文都按原文保留，不做整体重建。
+ * 白名单中的受管键（surface / aliases / tags / notes / sentence{i} / trans{i} /
+ * origin{i}）在 payload 缺省时视为用户已清空该字段，合并时从文件移除，
+ * 避免删除例句 / 笔记等操作在保存后因旧键残留而「复活」。
  *
  * 本模块必须保持纯函数、不依赖 obsidian 运行时，便于在 node 中直接测试；
  * YAML 序列化通过 YamlStringifier 注入（运行时传 Obsidian 的 stringifyYaml）。
@@ -72,7 +75,13 @@ type WordFileParts = {
 export function splitWordFileText(text: string): WordFileParts {
     const match = text.match(FRONTMATTER_BLOCK_REGEX);
     if (!match) {
-        return { bom: "", fmText: null, body: text };
+        // 无 frontmatter：BOM 也要剥离到 bom 字段，避免合并插入 frontmatter 时残留在正文开头
+        const hasBom = text.startsWith("\uFEFF");
+        return {
+            bom: hasBom ? "\uFEFF" : "",
+            fmText: null,
+            body: hasBom ? text.slice(1) : text,
+        };
     }
     // 结束标记所在行的换行属于 frontmatter 块，正文从下一行开始
     const body = text.slice(match[0].length).replace(/^(\r?\n)/, "");
@@ -85,6 +94,20 @@ type FrontMatterPart =
 
 // 顶层的 `key: value` / `key:`；键名内不允许出现冒号和空白
 const TOP_LEVEL_KEY_REGEX = /^([^:#\s][^:]*):(?:\s|$)/;
+
+// mergeWordFile 视为「插件受管」的列表键：payload 缺省（用户已清空）时从文件移除
+const MANAGED_LIST_KEYS = new Set(["surface", "aliases", "tags", "notes"]);
+const MANAGED_SENTENCE_KEY_REGEX = /^(?:sentence|trans|origin)(\d+)$/;
+
+// 例句三元组键的编号（1 起）；非例句受管键返回 null
+function managedSentenceIndex(key: string): number | null {
+    const match = key.match(MANAGED_SENTENCE_KEY_REGEX);
+    if (!match) {
+        return null;
+    }
+    const index = Number(match[1]);
+    return index >= 1 ? index : null;
+}
 
 /**
  * 把 frontmatter 文本切成有序片段：顶层键（含其缩进的续行，如块状列表、
@@ -142,7 +165,9 @@ function segmentFrontMatterText(fmText: string): FrontMatterPart[] {
  * - existingFileText 为 null / 空白：等价于历史 createFM 的整文件输出
  *   `---\n${stringify(payloadFm)}---\n`（新建文件场景，行为不变）；
  * - 已有文件：payloadFm 中的白名单键原地替换（键不存在则按 payloadFm
- *   顺序追加到 frontmatter 末尾），其余片段与正文逐字节保留。
+ *   顺序追加到 frontmatter 末尾），其余片段与正文逐字节保留；
+ * - 受管键（surface / aliases / tags / notes / sentence{i} / trans{i} /
+ *   origin{i}）在 payloadFm 中缺省时视为用户已清空，从文件移除而不保留旧值。
  */
 export function mergeWordFile(
     existingFileText: string | null,
@@ -163,15 +188,33 @@ export function mergeWordFile(
 
     const parts = segmentFrontMatterText(fmText);
     const replaced = new Set<string>();
+    // payload 携带的例句最大编号（三元组同编号成套生成，以 sentence{i} 为准；0 表示无例句）
+    let maxPayloadSentenceIndex = 0;
+    for (const key of Object.keys(payloadFm)) {
+        const index = managedSentenceIndex(key);
+        if (index !== null && key.startsWith("sentence")) {
+            maxPayloadSentenceIndex = Math.max(maxPayloadSentenceIndex, index);
+        }
+    }
     const chunks: string[] = [];
     for (const part of parts) {
-        if (part.kind === "key" && part.key in payloadFm && !replaced.has(part.key)) {
-            // 同名键出现多次时只替换第一处，其余按原文保留
-            chunks.push(stringify({ [part.key]: payloadFm[part.key] }));
-            replaced.add(part.key);
-        } else {
-            chunks.push(part.text);
+        if (part.kind === "key" && !replaced.has(part.key)) {
+            if (part.key in payloadFm) {
+                // 同名键出现多次时只替换第一处，其余按原文保留
+                chunks.push(stringify({ [part.key]: payloadFm[part.key] }));
+                replaced.add(part.key);
+                continue;
+            }
+            // payload 未携带的受管键：字段已被用户清空，移除旧值避免保存后「复活」
+            const sentenceIndex = managedSentenceIndex(part.key);
+            if (
+                MANAGED_LIST_KEYS.has(part.key) ||
+                (sentenceIndex !== null && sentenceIndex > maxPayloadSentenceIndex)
+            ) {
+                continue;
+            }
         }
+        chunks.push(part.text);
     }
     for (const [key, value] of Object.entries(payloadFm)) {
         if (!replaced.has(key)) {
@@ -193,11 +236,12 @@ export type ReviewLogEntry = {
     note?: string;
 };
 
-// js-yaml 会把 "2026-09-20" 这类值解析为 Date 对象，显示层需要稳定的字符串
+// js-yaml 会把 "2026-09-20" 这类值解析为 Date 对象（按 Date.UTC 构造的零点 UTC），
+// 显示层需要稳定的字符串：必须用 UTC 分量格式化，本地时区分量在 UTC-X 时区会错显为前一天
 function toDisplayString(value: unknown): string | undefined {
     if (value instanceof Date && !isNaN(value.getTime())) {
         const p = (n: number) => String(n).padStart(2, "0");
-        return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+        return `${value.getUTCFullYear()}-${p(value.getUTCMonth() + 1)}-${p(value.getUTCDate())}`;
     }
     if (typeof value === "string" && value.trim() !== "") {
         return value.trim();
@@ -326,6 +370,23 @@ function classifyReviewResult(result: string | undefined): boolean | null {
     return null;
 }
 
+// 把复习日期归一化为 ISO 日期（YYYY-MM-DD）再分桶：表格原文可能是
+// "2026/9/19"、"9/19/2026" 等非补零 / 美式写法，直接按字符串截断分桶
+// 会导致同日拆桶、排序错乱；无法识别的写法按原样截断（保持容错）
+function normalizeDateKey(date: string): string {
+    const trimmed = date.trim();
+    const pad = (n: string) => n.padStart(2, "0");
+    let match = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (match) {
+        return `${match[1]}-${pad(match[2])}-${pad(match[3])}`;
+    }
+    match = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (match) {
+        return `${match[3]}-${pad(match[1])}-${pad(match[2])}`;
+    }
+    return trimmed.slice(0, 10);
+}
+
 // 汇总为复习留存统计：按日去重排序，留存率 = 累计(通过)/(累计(通过)+累计(失败))，
 // 无法识别结果档位的记录计入当日复习次数但不参与留存率
 export function aggregateReviewStats(entries: ReviewLogEntry[]): ReviewStats {
@@ -334,7 +395,7 @@ export function aggregateReviewStats(entries: ReviewLogEntry[]): ReviewStats {
         if (!entry.date) {
             continue;
         }
-        const day = entry.date.slice(0, 10);
+        const day = normalizeDateKey(entry.date);
         const agg = byDate.get(day) ?? { total: 0, pass: 0, fail: 0 };
         agg.total++;
         const classified = classifyReviewResult(entry.result);

@@ -151,6 +151,14 @@ function toNonEmptyString(value: unknown, fallback = ""): string {
     return typeof value === "string" ? value.trim() || fallback : fallback;
 }
 
+/**
+ * Prompts are kept verbatim (including empty or whitespace-padded values) so saving
+ * matches what the user typed; only missing / non-string values fall back to defaults.
+ */
+function toPromptString(value: unknown, fallback: string): string {
+    return typeof value === "string" ? value : fallback;
+}
+
 function toOptionalNumber(value: unknown): number | undefined {
     if (typeof value === "number" && Number.isFinite(value)) {
         return value;
@@ -545,10 +553,10 @@ export function normalizeAISettings(value: unknown): AISettingsV2 {
             cardModelId: selectExistingModelId(routingSource.cardModelId, models, ""),
         },
         prompts: {
-            search: toNonEmptyString(promptsSource.search, defaults.prompts.search),
-            contextSearch: toNonEmptyString(promptsSource.contextSearch, defaults.prompts.contextSearch),
-            translate: toNonEmptyString(promptsSource.translate, defaults.prompts.translate),
-            card: toNonEmptyString(promptsSource.card, defaults.prompts.card),
+            search: toPromptString(promptsSource.search, defaults.prompts.search),
+            contextSearch: toPromptString(promptsSource.contextSearch, defaults.prompts.contextSearch),
+            translate: toPromptString(promptsSource.translate, defaults.prompts.translate),
+            card: toPromptString(promptsSource.card, defaults.prompts.card),
         },
     };
 }
@@ -640,8 +648,25 @@ export function getPromptForScenario(ai: AISettingsV2, scenario: AIScenario, has
 export function resolveAIModelForScenario(
     ai: AISettingsV2,
     scenario: AIScenario,
-    options: { modelIdOverride?: string; hasContext?: boolean } = {}
+    options: { modelIdOverride?: string; hasContext?: boolean; allowDisabledModel?: boolean } = {}
 ): { provider: AIProviderConfig; model: AIModelConfig; prompt: string } {
+    const overrideId = toNonEmptyString(options.modelIdOverride);
+    if (overrideId && options.allowDisabledModel) {
+        // Test Connection must exercise exactly the model being edited,
+        // even when the model or its provider is disabled, instead of silently
+        // falling back to the routing default model.
+        const model = findAIModel(ai, overrideId);
+        const provider = model ? findAIProvider(ai, model.providerId) : undefined;
+        if (!model || !provider) {
+            throw new Error(`AI model not found: ${overrideId}`);
+        }
+        return {
+            provider,
+            model,
+            prompt: getPromptForScenario(ai, scenario, options.hasContext),
+        };
+    }
+
     const available = getAvailableAIModels(ai);
     const availableIds = new Set(available.map((model) => model.id));
     const candidates = [

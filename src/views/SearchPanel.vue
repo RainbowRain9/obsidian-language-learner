@@ -56,6 +56,12 @@ let loadings = ref<boolean[]>([]);
 let shows = ref<boolean[]>([]);
 const searchContext = ref<SearchContext>({});
 watch([() => plugin.store.dictsChange, () => currentLanguageRef.value], () => {
+    // 保留各词典当前的结果显示状态：KeepAlive 缓存的子组件在 word 不变时不会重新上报
+    let preserved: { [K in string]: boolean } = {};
+    components.value.forEach((cp, i) => {
+        preserved[cp.id] = shows.value[i];
+    });
+
     let collection = Object.keys(plugin.settings.dictionaries)
         .map((dict: keyof typeof dicts) => {
             // 检查字典是否存在
@@ -83,7 +89,7 @@ watch([() => plugin.store.dictsChange, () => currentLanguageRef.value], () => {
         map[v.id] = i;
     });
     loadings.value = Array(collection.length).fill(false);
-    shows.value = Array(collection.length).fill(false);
+    shows.value = collection.map((v) => preserved[v.id] || false);
 
 }, {
     immediate: true
@@ -107,6 +113,8 @@ function applyHistoryEntry(entry?: SearchHistoryEntry) {
     word.value = entry.word;
     inputWord.value = entry.word;
     searchContext.value = { ...entry.context };
+    // 同词重查：word 未变化时也驱动各词典重新发起查询
+    searchNonce.value++;
 }
 
 function switchHistory(direction: "prev" | "next") {
@@ -128,6 +136,8 @@ function appendHistory(entry: SearchHistoryEntry) {
 
 let inputWord = ref("");
 let word = ref("");
+// 查询序号：每次应用历史/搜索自增，同词重查时靠它触发词典子组件的 watch
+let searchNonce = ref(0);
 const onSearch = async (evt: CustomEvent) => {
     const text = evt.detail.selection;
     const entry: SearchHistoryEntry = {
@@ -142,6 +152,9 @@ const onSearch = async (evt: CustomEvent) => {
 };
 
 function handleSearch() {
+    if (!inputWord.value.trim()) {
+        return;
+    }
     const entry: SearchHistoryEntry = {
         word: inputWord.value,
         context: {},
@@ -160,6 +173,10 @@ function handleClick(evt: MouseEvent) {
 
     }
     else if (target.tagName === "A") {
+        // 外链（如 cambridge 的 a.had，externalLink 标记 target=_blank）放行默认跳转
+        if ((target as HTMLAnchorElement).target === "_blank") {
+            return;
+        }
         evt.preventDefault();
         evt.stopPropagation();
         const entry: SearchHistoryEntry = {
@@ -177,11 +194,13 @@ function getComponentProps(id: string) {
             word: word.value,
             sentenceText: searchContext.value.sentenceText || "",
             origin: searchContext.value.origin || "",
+            searchNonce: searchNonce.value,
         };
     }
 
     return {
         word: word.value,
+        searchNonce: searchNonce.value,
     };
 }
 

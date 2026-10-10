@@ -36,7 +36,8 @@ export class DataPanelView extends ItemView {
 		this.vueapp.mount(container);
 	}
 	async onClose() {
-		this.vueapp.unmount();
+		// onOpen 未完成（createApp 之前抛错）即关闭时 vueapp 可能为空
+		this.vueapp?.unmount();
 		this.vueapp = null;
 	}
 }

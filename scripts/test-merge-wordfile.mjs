@@ -153,8 +153,8 @@ section("T1b 纯外部键文件（ScoreFlow 先写、插件后写）");
     check("插件白名单键追加写入", out.includes("expression: acquaintance\n") && out.includes("status: 1\n"), out);
 }
 
-// ---------- T2 例句只增不丢 ----------
-section("T2 例句只增不丢（已有 sentence2，payload 只带 1 条）");
+// ---------- T2 例句随 payload 截断（删除例句后保存不复活） ----------
+section("T2 例句随 payload 截断（已有 sentence2，payload 只带 1 条）");
 {
     const existing = `---
 expression: acquaintance
@@ -172,13 +172,16 @@ origin2: 《保留》
 `;
     const payload = fmOf({ sentences: [{ text: "new one", trans: "新翻译", origin: "《新》" }] });
     const out = mergeWordFile(existing, payload, fixtureStringify);
-    check("sentence2/trans2/origin2 仍在",
-        out.includes("sentence2: keep me\n") && out.includes("trans2: 保留翻译\n") && out.includes("origin2: 《保留》\n"), out);
+    check("sentence2/trans2/origin2 随删除移除",
+        !out.includes("sentence2") && !out.includes("trans2") && !out.includes("origin2") && !out.includes("keep me"), out);
     check("sentence1 被覆盖为新例句", out.includes("sentence1: new one\n") && !out.includes("old one"), out);
+    check("截断后仍是合法 YAML：仅剩第一组例句三元组",
+        fixtureParse(fmBody(out))["sentence1"] === "new one"
+        && !("sentence2" in fixtureParse(fmBody(out))), out);
 }
 
-// ---------- T3 payload 未携带的既有键保留 ＋ 块列表键整段替换 ----------
-section("T3 payload 未带的键保留；已有块列表键整段替换");
+// ---------- T3 payload 未携带的受管键移除；携带时块列表键整段替换 ----------
+section("T3 受管键缺省即移除；已有块列表键整段替换");
 {
     const existing = `---
 expression: abide by
@@ -196,18 +199,20 @@ tags:
   - phrase
 ---
 `;
-    // payload 不带 surface/aliases/notes/tags（空数组按白名单规则不写入）
+    // payload 不带 surface/aliases/notes/tags（用户已清空，空数组按白名单规则不写入）→ 旧键移除
     const out = mergeWordFile(existing, fmOf({ status: 3, meaning: "phr. 遵守；信守" }), fixtureStringify);
-    check("surface 保留", out.includes("surface: abide by\n"), out);
-    check("aliases 块列表原样保留", out.includes("aliases:\n  - abided by\n  - abiding by\n"), out);
-    check("notes 块列表原样保留", out.includes("notes:\n  - \"'abide'与'by'搭配\"\n") || out.includes("notes:\n"), out);
-    check("tags 保留", out.includes("tags:\n  - phrase\n"), out);
+    check("surface 移除", !out.includes("surface:"), out);
+    check("aliases 块列表移除", !out.includes("aliases") && !out.includes("abided by") && !out.includes("abiding by"), out);
+    check("notes 块列表移除", !out.includes("notes") && !out.includes("'abide'与'by'搭配"), out);
+    check("tags 移除", !out.includes("tags") && !out.includes("phrase"), out);
     check("status 覆盖", out.includes("status: 3\n"), out);
 
     // 换成 payload 携带 aliases 时：旧块列表整段被替换，相邻键不受影响
     const out2 = mergeWordFile(existing, fmOf({ aliases: ["abides by"] }), fixtureStringify);
     check("已有 aliases 块列表被新值整段替换", out2.includes("aliases:\n  - abides by\n") && !out2.includes("abided by"), out2);
-    check("相邻键 notes/tags 不受替换影响", out2.includes("tags:\n  - phrase\n") && out2.includes("notes:\n"), out2);
+    check("payload 未携带的相邻受管键（surface/notes/tags）一并移除且无孤儿列表项",
+        !out2.includes("surface:") && !out2.includes("notes") && !out2.includes("tags")
+        && !out2.includes("'abide'与'by'搭配") && !out2.includes("phrase"), out2);
 }
 
 // ---------- T3b 不缩进块列表风格（js-yaml 3 形态） ----------
@@ -257,6 +262,17 @@ status: 1
 ---
 `, fm, fixtureStringify);
     check("仅 FM（独立成行）：状态覆盖且无正文", e.includes("status: 2\n") && e.endsWith("---\n"), e);
+
+    const bomNoFm = mergeWordFile("\uFEFF# just body\nsecond line", fm, fixtureStringify);
+    check("BOM＋无 FM：BOM 保持在最前、frontmatter 紧随、正文开头不再残留 BOM",
+        bomNoFm.startsWith("\uFEFF---\n")
+        && bomNoFm.indexOf("\uFEFF", 1) === -1
+        && bomNoFm.includes("---\n\n# just body\nsecond line"),
+        JSON.stringify(bomNoFm));
+    const bomWithFm = mergeWordFile("\uFEFF---\nstatus: 1\n---\nbody line", fm, fixtureStringify);
+    check("BOM＋FM：BOM 保持在最前、状态覆盖、正文保留",
+        bomWithFm.startsWith("\uFEFF---\n") && bomWithFm.includes("status: 2\n") && bomWithFm.endsWith("body line"),
+        JSON.stringify(bomWithFm));
 }
 
 // ---------- T5 新建文件：与旧 createFM 输出逐字节一致（快照） ----------
@@ -301,6 +317,57 @@ origin1: 《2010年英语一Test3》
     check("空白文件 === 同一快照", mergeWordFile("  \n ", payloadFm, fixtureStringify) === frozen);
 }
 
+// ---------- T8 受管键删除综合（LearnPanel 删例句/笔记/标签后保存不复活） ----------
+section("T8 受管键删除综合（删例句/笔记/标签/别名/surface 后保存）");
+{
+    const existing = `---
+expression: acquaintance
+meaning: n. 熟人
+date: 2026-03-31 15:34:36
+status: 1
+type: WORD
+surface: Acquaintance
+aliases:
+  - acquaintances
+tags:
+  - n1
+notes:
+  - note a
+sentence1: s one
+trans1: t one
+origin1: o one
+sentence2: s two
+trans2: t two
+origin2: o two
+复习次数: 3
+下次复习: 2026-09-20
+---
+# note body
+`;
+    // 用户删光例句、笔记、标签、别名、surface 后保存（payload 仅剩必填五键）
+    const out = mergeWordFile(existing, fmOf({ status: 2 }), fixtureStringify);
+    const parsed = fixtureParse(fmBody(out));
+    check("受管键全部移除（surface/aliases/tags/notes/sentenceN/transN/originN）",
+        ["surface", "aliases", "tags", "notes",
+            "sentence1", "trans1", "origin1", "sentence2", "trans2", "origin2"]
+            .every((k) => !(k in parsed)), JSON.stringify(parsed));
+    check("外部中文键原样保留", out.includes("复习次数: 3\n") && out.includes("下次复习: 2026-09-20\n"), out);
+    check("正文保留", out.includes("---\n# note body\n"), out);
+    check("白名单五键仍在且 status 已覆盖",
+        parsed["expression"] === "acquaintance" && parsed["status"] === 2, JSON.stringify(parsed));
+
+    // 保留 1 条例句、清空笔记：第一组三元组替换、第二组移除、notes 移除
+    const out2 = mergeWordFile(existing, fmOf({
+        status: 2,
+        sentences: [{ text: "kept", trans: "留", origin: "《留》" }],
+    }), fixtureStringify);
+    const parsed2 = fixtureParse(fmBody(out2));
+    check("保留 1 条例句时第二组三元组移除、第一组替换、notes 移除",
+        parsed2["sentence1"] === "kept" && parsed2["trans1"] === "留" && parsed2["origin1"] === "《留》"
+        && !("sentence2" in parsed2) && !("trans2" in parsed2) && !("origin2" in parsed2)
+        && !("notes" in parsed2), JSON.stringify(parsed2));
+}
+
 // ---------- T6 buildWordFrontMatter 白名单规则 ----------
 section("T6 buildWordFrontMatter 白名单与格式化规则");
 {
@@ -329,8 +396,11 @@ section("T6 buildWordFrontMatter 白名单与格式化规则");
 section("T7 下次复习 / 复习记录 解析与留存聚合");
 {
     check("下次复习：字符串原样", normalizeNextReview("2026-09-20") === "2026-09-20");
+    // js-yaml 的 timestamp 类型按 Date.UTC 构造（零点 UTC），fixture 用 Date.UTC 忠实模拟
     check("下次复习：Date 归一为 YYYY-MM-DD",
-        normalizeNextReview(new Date(2026, 8, 20)) === "2026-09-20");
+        normalizeNextReview(new Date(Date.UTC(2026, 8, 20))) === "2026-09-20");
+    check("下次复习：UTC 日内任意时刻不因主机时区回退",
+        normalizeNextReview(new Date(Date.UTC(2026, 8, 20, 23, 59))) === "2026-09-20");
     check("下次复习：数字转字符串", normalizeNextReview(5) === "5");
     check("下次复习：缺失/空白容错为 undefined",
         normalizeNextReview(undefined) === undefined && normalizeNextReview(null) === undefined
@@ -342,7 +412,7 @@ section("T7 下次复习 / 复习记录 解析与留存聚合");
     const log = parseReviewLog([
         { "日期": "2026-09-01", "结果": "Good", "备注": "首刷" },
         "2026-09-05",
-        { date: new Date(2026, 8, 7), result: "Again" },
+        { date: new Date(Date.UTC(2026, 8, 7)), result: "Again" },
         { "结果": "无日期应跳过" },
     ]);
     check("复习记录：中/英键名、纯日期标量、Date 均可解析且无日期项跳过",
@@ -396,6 +466,16 @@ section("T7 下次复习 / 复习记录 解析与留存聚合");
     const emptyStats = aggregateReviewStats([]);
     check("聚合：空输入返回空序列",
         emptyStats.dates.length === 0 && emptyStats.dailyCounts.length === 0 && emptyStats.cumulativeRetention.length === 0);
+    const mixedStats = aggregateReviewStats([
+        { date: "2026/9/19", result: "Good" },
+        { date: "2026-09-19", result: "Again" },
+        { date: "9/18/2026", result: "Easy" },
+        { date: "2026.9.20", result: "Good" },
+    ]);
+    check("聚合：非 ISO 日期归一化后同日同桶、轴顺序正确",
+        JSON.stringify(mixedStats.dates) === JSON.stringify(["2026-09-18", "2026-09-19", "2026-09-20"])
+        && JSON.stringify(mixedStats.dailyCounts) === JSON.stringify([1, 2, 1]),
+        JSON.stringify(mixedStats));
 }
 
 // ---------- 汇总 ----------

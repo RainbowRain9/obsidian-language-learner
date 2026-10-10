@@ -367,6 +367,7 @@ Capability Mode 用来决定 reasoning / thinking 相关设置如何转换成 AP
 - `openai-reasoning`
 - `thinking-config`
 - `siliconflow-thinking`
+- `zhipu-thinking`
 
 ### 10.1 openai-reasoning
 
@@ -394,6 +395,16 @@ Capability Mode 用来决定 reasoning / thinking 相关设置如何转换成 AP
 
 - `enable_thinking`
 - `thinking_budget`
+
+### 10.4 zhipu-thinking
+
+用于 Zhipu / GLM 风格的 thinking 字段映射。
+
+会发送这个字段：
+
+- `thinking.type`（`enabled` / `disabled`）
+
+当 model 级别的 thinking 或 reasoning 任一启用时，`thinking.type` 为 `enabled`；两者都关闭时为 `disabled`。与其他模式不同，这个字段总会发送（其他模式通常只在启用时才写入对应字段）。
 
 ### 经验建议
 

@@ -34,6 +34,7 @@ export class StatView extends ItemView {
         this.vueApp.mount(content);
     }
     async onClose() {
-        this.vueApp.unmount();
+        // onOpen 未完成（createApp 之前抛错）即关闭时 vueApp 可能为空
+        this.vueApp?.unmount();
     }
 }

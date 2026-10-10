@@ -14,18 +14,27 @@ const STATUS_MAP = ["ignore", "learning", "familiar", "known", "learned"];
 type AnyNode = Root | Content | Content[];
 export var state = { loading_flag: false, };
 
-export class TextParser {
+// 单次解析调用的状态。TextParser 是全局单例，但 processor.parse 与 stringify 均为同步调用：
+// 在进入每个同步区前把本次调用的上下文绑定到 currentCtx，避免并发 text2HTML 的
+// await 间隙互相覆盖实例字段（单词状态错乱 / 短语漏包 / 音频占位符丢失）。
+interface ParseContext {
     // 记录短语位置
-    phrases: Phrase[] = [];
+    phrases: Phrase[];
     // 记录单词状态
-    words: Map<string, Word> = new Map<string, Word>();
+    words: Map<string, Word>;
     // 记录音频嵌入
-    audioEmbeds: Map<string, string> = new Map();
+    audioEmbeds: Map<string, string>;
+    // 短语游标
+    pIdx: number;
+}
+
+export class TextParser {
     // 渲染缓存（HTML + 统计结果）
     private htmlCache: Map<string, string> = new Map();
     private countCache: Map<string, [number, number, number]> = new Map();
     private readonly maxCacheSize = 30;
-    pIdx: number = 0;
+    // 当前同步解析区（parse / stringify）所使用的调用上下文
+    private currentCtx: ParseContext = TextParser.createContext();
     plugin: Plugin;
     processor: Processor;
     constructor(plugin: Plugin) {
@@ -35,6 +44,15 @@ export class TextParser {
             .use(this.addPhrases())
             .use(this.addMarkdown())
             .use(this.stringfy2HTML());
+    }
+
+    private static createContext(): ParseContext {
+        return {
+            phrases: [],
+            words: new Map<string, Word>(),
+            audioEmbeds: new Map<string, string>(),
+            pIdx: 0,
+        };
     }
 
     invalidateCache() {
@@ -94,6 +112,7 @@ export class TextParser {
             return [0, 0, 0];
         }
 
+        this.currentCtx = TextParser.createContext();
         const ast = this.processor.parse(cleanText);
         let wordSet: Set<string> = new Set();
         visit(ast, "WordNode", (word) => {
@@ -117,34 +136,36 @@ export class TextParser {
         return result;
     }
 
-    processAudioEmbeds(text: string): string {
-        this.audioEmbeds.clear();
+    processAudioEmbeds(ctx: ParseContext, text: string): string {
+        ctx.audioEmbeds.clear();
         // 匹配 ![[filename.ext]] 格式的音频文件
         const audioRegex = /!\[\[([^\]]+\.(?:mp3|wav|m4a|ogg|webm|flac))\]\]/gi;
         return text.replace(audioRegex, (match, filename) => {
             // 使用一个特殊的占位符，确保它被解析为一个单词
-            const placeholder = `AUDIOEMBEDMARKER${this.audioEmbeds.size}`;
-            this.audioEmbeds.set(placeholder, filename);
+            const placeholder = `AUDIOEMBEDMARKER${ctx.audioEmbeds.size}`;
+            ctx.audioEmbeds.set(placeholder, filename);
             return placeholder;
         });
     }
 
     async text2HTML(text: string) {
-        this.pIdx = 0;
-        this.words.clear();
+        // 每次调用独立的解析状态，避免并发 parse 互相污染
+        const ctx = TextParser.createContext();
         await this.plugin.checkPath();
 
         // 处理音频嵌入，替换为占位符
-        text = this.processAudioEmbeds(text);
+        text = this.processAudioEmbeds(ctx, text);
 
         // 查找已知短语，用于构造ast中的PhraseNode
-        this.phrases = (
+        ctx.phrases = (
             await this.plugin.db.getStoredWords({
                 article: text.toLowerCase(), //文章
                 words: [],
             })
         ).phrases;
 
+        // processor.parse 为同步调用：先绑定本次上下文，短语包裹才能读到正确的 phrases
+        this.currentCtx = ctx;
         const ast = this.processor.parse(text); //将文本 text 解析为抽象语法树（AST）
 
         // 遍历 AST，标记音频嵌入是 inline 还是 block
@@ -156,7 +177,7 @@ export class TextParser {
             children.forEach(child => {
                 if (child.type === "WordNode") {
                     const text = toString(child);
-                    if (this.audioEmbeds.has(text)) {
+                    if (ctx.audioEmbeds.has(text)) {
                         audioNodes.push(child);
                     } else {
                         hasText = true;
@@ -178,21 +199,25 @@ export class TextParser {
         visit(ast, "WordNode", (word) => {
             let wordText = toString(word);
             // 如果是音频占位符，不计入单词集合
-            if (this.audioEmbeds.has(wordText)) return;
+            if (ctx.audioEmbeds.has(wordText)) return;
             wordSet.add(wordText.toLowerCase());
         });
-        // 查询这些单词的status
+        // 查询这些单词的status（await 期间其他并发调用可能改写 currentCtx）
         let stored = await this.plugin.db.getStoredWords({
             article: "",
             words: [...wordSet],
         });
 
-        stored.words.forEach((w) => this.words.set(w.text, w));
+        // 键与查询侧（toHTMLString）一致，统一小写
+        stored.words.forEach((w) => ctx.words.set(w.text.toLowerCase(), w));
+        // processor.stringify 为同步调用：重新绑定本次上下文再渲染
+        this.currentCtx = ctx;
         let HTML = this.processor.stringify(ast) as any as string;
         return HTML;
     }
 
     async getWordsPhrases(text: string) {
+        this.currentCtx = TextParser.createContext();
         const ast = this.processor.parse(text);
         let words: Set<string> = new Set();
         visit(ast, "WordNode", (word) => {
@@ -229,9 +254,10 @@ export class TextParser {
     wrapWord2Phrase(node: Content, index: number, parent: Parent) {
         if (!node.hasOwnProperty("children")) return;
 
+        const ctx = this.currentCtx;
         if (
-            this.pIdx >= this.phrases.length ||
-            node.position.end.offset <= this.phrases[this.pIdx].offset
+            ctx.pIdx >= ctx.phrases.length ||
+            node.position.end.offset <= ctx.phrases[ctx.pIdx].offset
         )
             return;
 
@@ -242,18 +268,18 @@ export class TextParser {
             (p = children.findIndex(
                 (child) =>
                     child.position.start.offset ===
-                    this.phrases[this.pIdx].offset
+                    ctx.phrases[ctx.pIdx].offset
             )) !== -1
         ) {
             let q = children.findIndex(
                 (child) =>
                     child.position.end.offset ===
-                    this.phrases[this.pIdx].offset +
-                    this.phrases[this.pIdx].text.length
+                    ctx.phrases[ctx.pIdx].offset +
+                    ctx.phrases[ctx.pIdx].text.length
             );
 
             if (q === -1) {
-                this.pIdx++;
+                ctx.pIdx++;
                 return;
             }
             let phrase = children.slice(p, q + 1);
@@ -261,16 +287,16 @@ export class TextParser {
                 type: "PhraseNode",
                 children: phrase,
                 position: {
-                    start: { ...phrase.first().position.start },
-                    end: { ...phrase.last().position.end },
+                    start: { ...phrase[0].position.start },
+                    end: { ...phrase[phrase.length - 1].position.end },
                 },
             } as any);
 
-            this.pIdx++;
+            ctx.pIdx++;
 
             if (
-                this.pIdx >= this.phrases.length ||
-                node.position.end.offset <= this.phrases[this.pIdx].offset
+                ctx.pIdx >= ctx.phrases.length ||
+                node.position.end.offset <= ctx.phrases[ctx.pIdx].offset
             )
                 return;
         }
@@ -357,8 +383,8 @@ export class TextParser {
                     let text = toString(n.children);
 
                     // 检查是否为音频嵌入占位符
-                    if (this.audioEmbeds.has(text)) {
-                        const filename = this.audioEmbeds.get(text);
+                    if (this.currentCtx.audioEmbeds.has(text)) {
+                        const filename = this.currentCtx.audioEmbeds.get(text);
                         const file = this.plugin.app.metadataCache.getFirstLinkpathDest(filename, "");
                         if (file instanceof TFile) {
                             const src = this.plugin.app.vault.getResourcePath(file);
@@ -418,8 +444,9 @@ export class TextParser {
                     }
 
                     let textLower = text.toLowerCase();
-                    let status = this.words.has(textLower)
-                        ? STATUS_MAP[this.words.get(textLower).status]
+                    let words = this.currentCtx.words;
+                    let status = words.has(textLower)
+                        ? STATUS_MAP[words.get(textLower).status]
                         : "new";
 
                     return /[0-9\u4e00-\u9fa5]/.test(text) // 不把数字当做单词
@@ -429,11 +456,13 @@ export class TextParser {
                 case "PhraseNode": {
                     let childText = toString(n.children);
                     let text = this.toHTMLString(n.children);
-                    // 获取词组的status
-                    let phrase = this.phrases.find(
+                    // 获取词组的status；找不到时（如并发解析残留）退回 new，避免解引用 undefined
+                    let phrase = this.currentCtx.phrases.find(
                         (p) => p.text === childText.toLowerCase()
                     );
-                    let status = STATUS_MAP[phrase.status];
+                    let status = phrase
+                        ? STATUS_MAP[phrase.status]
+                        : "new";
 
                     return `<span class="phrase ${status}">${text}</span>`;
                 }

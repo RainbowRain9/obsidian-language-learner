@@ -254,6 +254,7 @@ export default {
     "Transcript imported successfully": "Transcript imported successfully",
     "Media Extended transcript saver is not available": "Media Extended transcript saver is not available",
     "Failed to import transcript file": "Failed to import transcript file",
+    "Failed to import transcript from URL": "Failed to import transcript from URL",
     "From remote URL": "From remote URL",
     "Transcript linked successfully": "Transcript linked successfully",
     "From YouTube": "From YouTube",

@@ -3,7 +3,7 @@ import { App, Notice, PluginSettingTab, Setting, Modal, TextComponent, debounce 
 import { LocalDb } from "./db/local_db";
 import { FileDb } from "./db/file_db";
 import LanguageLearner from "./plugin";
-import { t, type UiLanguage } from "./lang/helper";
+import { t, getLanguage, type UiLanguage } from "./lang/helper";
 import { WarningModal, OpenFileModal } from "./modals"
 import { dicts } from "@dict/list";
 import store from "./store";
@@ -296,15 +296,26 @@ function normalizeAIAutofillSettings(value: unknown): AIAutofillSettings {
 export function normalizeSettings(data: unknown): MyPluginSettings {
     const source = isRecord(data) ? data : {};
     const defaults = DEFAULT_SETTINGS;
-    const dictionaries = isRecord(source.dictionaries) ? source.dictionaries : {};
+    const dictionaries: MyPluginSettings["dictionaries"] = { ...defaults.dictionaries };
+    if (isRecord(source.dictionaries)) {
+        // 逐条校验：null / 非对象 / 字段类型异常的条目回退默认项，避免设置页解引用时抛错
+        Object.entries(source.dictionaries).forEach(([id, entry]) => {
+            const fallback = defaults.dictionaries[id] || { enable: false, priority: 99 };
+            if (isRecord(entry)) {
+                dictionaries[id] = {
+                    enable: typeof entry.enable === "boolean" ? entry.enable : fallback.enable,
+                    priority: typeof entry.priority === "number" ? entry.priority : fallback.priority,
+                };
+            } else {
+                dictionaries[id] = { ...fallback };
+            }
+        });
+    }
 
     return {
         ...defaults,
         ...source,
-        dictionaries: {
-            ...defaults.dictionaries,
-            ...dictionaries,
-        },
+        dictionaries,
         sentence_translation_mode: isSentenceTranslationMode(source.sentence_translation_mode)
             ? source.sentence_translation_mode
             : defaults.sentence_translation_mode,
@@ -601,12 +612,14 @@ function validateJsonParameterValue(value: string): { valid: boolean; message: s
 
 class AIProviderModal extends Modal {
     private draft: AIProviderConfig;
+    private readonly initialLabel: string;
     private readonly onSaveProvider: (provider: AIProviderConfig) => Promise<void>;
     private readonly readonlyPreset: boolean;
 
     constructor(app: App, provider: AIProviderConfig, onSaveProvider: (provider: AIProviderConfig) => Promise<void>) {
         super(app);
         this.draft = { ...provider, customHeaders: [...provider.customHeaders] };
+        this.initialLabel = provider.label;
         this.onSaveProvider = onSaveProvider;
         this.readonlyPreset = isBuiltinProvider(provider);
     }
@@ -639,7 +652,8 @@ class AIProviderModal extends Modal {
             .addText((text) => text
                 .setValue(this.draft.label)
                 .onChange((value) => {
-                    this.draft.label = value.trim() || this.draft.label;
+                    // 清空时回落到打开弹窗时的原始 label，而不是上一次输入的非空值
+                    this.draft.label = value.trim() || this.initialLabel;
                 }));
 
         new Setting(contentEl)
@@ -1534,40 +1548,40 @@ export class SettingTab extends PluginSettingTab {
             .setDesc(tr("Prompt used for normal AI dictionary lookups"))
             .addTextArea((text) => text
                 .setValue(this.plugin.settings.ai.prompts.search)
-                .onChange(async (value) => {
+                .onChange(debounce(async (value) => {
                     this.plugin.settings.ai.prompts.search = value;
                     await refresh();
-                }));
+                }, 500)));
 
         new Setting(promptsSection)
             .setName(tr("Context Search Prompt"))
             .setDesc(tr("Prompt used when sentence context is available"))
             .addTextArea((text) => text
                 .setValue(this.plugin.settings.ai.prompts.contextSearch)
-                .onChange(async (value) => {
+                .onChange(debounce(async (value) => {
                     this.plugin.settings.ai.prompts.contextSearch = value;
                     await refresh();
-                }));
+                }, 500)));
 
         new Setting(promptsSection)
             .setName(t("Translation Prompt"))
             .setDesc(tr("Use {sentence} as the placeholder"))
             .addTextArea((text) => text
                 .setValue(this.plugin.settings.ai.prompts.translate)
-                .onChange(async (value) => {
+                .onChange(debounce(async (value) => {
                     this.plugin.settings.ai.prompts.translate = value;
                     await refresh();
-                }));
+                }, 500)));
 
         new Setting(promptsSection)
             .setName(tr("Card Prompt"))
             .setDesc(tr("Prompt used for AI card autofill JSON output"))
             .addTextArea((text) => text
                 .setValue(this.plugin.settings.ai.prompts.card)
-                .onChange(async (value) => {
+                .onChange(debounce(async (value) => {
                     this.plugin.settings.ai.prompts.card = value;
                     await refresh();
-                }));
+                }, 500)));
 
         const autofillSection = createAISection(
             containerEl,
@@ -1869,14 +1883,20 @@ export class SettingTab extends PluginSettingTab {
             .addButton(button => button
                 .setButtonText(t("Export"))
                 .onClick(() => {
-                    const data = JSON.stringify(this.plugin.settings, null, 2);
-                    const blob = new Blob([data], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'language-learner-settings.json';
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    // 导出的 JSON 以明文包含所有 AI Provider 的 API Key，先确认再导出
+                    const warning = getLanguage().startsWith("zh")
+                        ? "导出的设置 JSON 将以明文包含所有 AI Provider 的 API Key，分享该文件可能泄露凭据。确定要导出吗？"
+                        : "The exported settings JSON will contain every AI provider's API key in plain text. Sharing this file may leak your credentials. Continue?";
+                    new WarningModal(this.app, warning, async () => {
+                        const data = JSON.stringify(this.plugin.settings, null, 2);
+                        const blob = new Blob([data], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'language-learner-settings.json';
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    }).open();
                 }));
 
         new Setting(containerEl)
@@ -1895,13 +1915,26 @@ export class SettingTab extends PluginSettingTab {
                             reader.onload = async (e) => {
                                 try {
                                     const content = e.target?.result as string;
+                                    const previousSettings = this.plugin.settings;
                                     const settings = normalizeSettings({
-                                        ...this.plugin.settings,
+                                        ...previousSettings,
                                         ...JSON.parse(content),
                                     });
                                     this.plugin.settings = settings;
                                     this.plugin.applyUiLanguage(this.plugin.settings.ui_language);
                                     await this.plugin.saveSettings();
+                                    // 数据库相关设置变化时重建运行时 db，避免要重启插件才生效
+                                    if (
+                                        previousSettings.only_fileDB !== settings.only_fileDB ||
+                                        previousSettings.db_name !== settings.db_name ||
+                                        previousSettings.word_folder !== settings.word_folder
+                                    ) {
+                                        this.plugin.db.close();
+                                        this.plugin.db = await this.plugin.openDB();
+                                        await this.plugin.db.open();
+                                        this.plugin.notifyWordStorageChanged();
+                                    }
+                                    this.plugin.store.dictsChange = !this.plugin.store.dictsChange;
                                     new Notice(t("Settings imported successfully!"));
                                     this.display();
                                 } catch (error) {
@@ -1989,7 +2022,8 @@ export class SettingTab extends PluginSettingTab {
                 .setButtonText(t("Reopen"))
                 .onClick(async () => {
                     this.plugin.db.close();
-                    this.plugin.db = new LocalDb(this.plugin);
+                    // 与 plugin.openDB() 一致：按 only_fileDB 选择 provider，而不是无条件切到 LocalDb
+                    this.plugin.db = await this.plugin.openDB();
                     await this.plugin.db.open();
                     new Notice(t("Database reopened"));
                 })
@@ -2071,8 +2105,9 @@ export class SettingTab extends PluginSettingTab {
                         async () => {
                             await this.plugin.db.destroyAll();
                             new Notice(t("Cleared"));
-                            this.plugin.db = new LocalDb(this.plugin);
-                            this.plugin.db.open();
+                            // 与 plugin.openDB() 一致：按 only_fileDB 选择 provider，而不是无条件切到 LocalDb
+                            this.plugin.db = await this.plugin.openDB();
+                            await this.plugin.db.open();
                         });
                     modal.open();
                 })
@@ -2197,14 +2232,14 @@ export class SettingTab extends PluginSettingTab {
                         var ignorwords = (await this.plugin.db.getAllExpressionSimple(true))
                             .filter(item => item.status === 0)
                             .flatMap(item => [item.expression, ...item.aliases]);
-                        this.plugin.db.destroyAll();
+                        await this.plugin.db.destroyAll();
                         this.plugin.db = new FileDb(this.plugin);
-                        this.plugin.db.open();
-                        this.plugin.db.postIgnoreWords(ignorwords.filter(item => item !== ""));
+                        await this.plugin.db.open();
+                        await this.plugin.db.postIgnoreWords(ignorwords.filter(item => item !== ""));
                     } else {
                         this.plugin.db = new LocalDb(this.plugin);
-                        this.plugin.db.open();
-                        this.plugin.updateIndexDB();
+                        await this.plugin.db.open();
+                        await this.plugin.updateIndexDB();
                     }
                     await this.plugin.saveSettings();
                     this.display();

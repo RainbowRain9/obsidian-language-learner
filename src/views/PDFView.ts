@@ -8,6 +8,7 @@ import {
     Platform,
 } from "obsidian";
 import Plugin from "@/plugin";
+import { escapeHtml } from "@/utils/helpers";
 
 export const PDF_FILE_EXTENSION = "pdf";
 export const VIEW_TYPE_PDF = "langr-pdf";
@@ -56,10 +57,12 @@ export class PDFView extends FileView {
         const prefix = Platform.isDesktopApp ? "app://local/" : "http://localhost/_capacitor_file_";
         const viewerPath =
             `${prefix}${basePath}/%2Eobsidian/plugins/obsidian-language-learner/pdf/web/viewer.html`;
+        // 文件路径整体 URL 编码（防 # 被当 fragment 截断、空格/中文路径定位失败），
+        // 拼好的 src 再做 HTML 转义，防文件名/vault 路径中的引号闭合属性注入 HTML
+        const fileParam = encodeURIComponent(`${prefix}${basePath}/${file.path}`);
         let content =
             '<iframe class="pdf" style="height:100%; width:100%;" ' +
-            `src="${viewerPath}` +
-            `?file=${prefix}${basePath}/${file.path}" />`;
+            `src="${escapeHtml(`${viewerPath}?file=${fileParam}`)}" />`;
         this.contentEl.innerHTML = content;
     }
 

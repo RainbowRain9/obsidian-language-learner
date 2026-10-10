@@ -278,6 +278,9 @@ watch(() => currentLanguageRef.value, () => {
 
 onUnmounted(() => {
 	removeEventListener("obsidian-langr-refresh-stat", refreshCharts);
+	// 释放 echarts 实例，避免反复开关统计视图造成实例与已分离 DOM 引用累积泄漏
+	sevenDays?.dispose();
+	reviewChart?.dispose();
 });
 
 </script>

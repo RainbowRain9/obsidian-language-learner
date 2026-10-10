@@ -1,6 +1,6 @@
 import { text } from "node:stream/consumers";
-import { App, Modal, Setting } from "obsidian";
-import { t } from "./lang/helper";
+import { App, Modal, Notice, Setting } from "obsidian";
+import { t, getLanguage } from "./lang/helper";
 
 // 输入文字
 class InputModal extends Modal {
@@ -69,6 +69,13 @@ class OpenFileModal extends Modal {
             .addButton(button => button
                 .setButtonText(t("Yes"))
                 .onClick((evt) => {
+                    // 未选择文件时禁止提交：importDB 是先删库再导入，undefined 会导致词库被清空
+                    if (!this.file) {
+                        new Notice(getLanguage().startsWith("zh")
+                            ? "请先选择一个文件"
+                            : "Please select a file first");
+                        return;
+                    }
                     this.onSubmit(this.file);
                     this.close();
                 })
