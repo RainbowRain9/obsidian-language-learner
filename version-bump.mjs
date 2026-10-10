@@ -39,7 +39,7 @@ function promoteChangelog(targetVersion) {
     const today = new Date().toISOString().slice(0, 10);
     const archivedSection = `## [${targetVersion}] - ${today}\n\n${unreleasedBody}\n`;
     const replacement = `## [Unreleased]\n\n${CHANGELOG_EMPTY_PLACEHOLDER}\n\n${archivedSection}`;
-    const updated = raw.replace(unreleasedRegex, replacement);
+    const updated = raw.replace(unreleasedRegex, () => replacement);
     writeFileSync(CHANGELOG_PATH, updated.endsWith("\n") ? updated : `${updated}\n`);
 }
 
