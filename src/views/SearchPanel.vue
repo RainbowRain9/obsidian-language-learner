@@ -19,7 +19,7 @@
             <button class="search-submit-btn" @click="handleSearch">{{ t("Search") }}</button>
         </div>
         <div class="dict-area">
-            <DictItem v-for="(cp, i) in components" :loading="loadings[i]" :name="cp.name" :id="cp.id">
+            <DictItem v-for="(cp, i) in components" :key="cp.id" :loading="loadings[i]" :name="cp.name" :id="cp.id">
                 <KeepAlive>
                     <Component
                         @loading="loading"
@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, getCurrentInstance } from "vue";
+import { ref, shallowRef, watch, onMounted, onUnmounted, getCurrentInstance } from "vue";
 
 import DictItem from "./DictItem.vue";
 import { currentLanguageRef, t } from "@/lang/helper";
@@ -50,7 +50,7 @@ type SearchHistoryEntry = {
     context: SearchContext;
 };
 
-let components = ref([]);
+let components = shallowRef([]);
 let map: { [K in string]: number } = {};
 let loadings = ref<boolean[]>([]);
 let shows = ref<boolean[]>([]);

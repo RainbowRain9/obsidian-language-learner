@@ -25,7 +25,7 @@ export class SearchPanelView extends ItemView {
         return SEARCH_ICON;
     }
     async onOpen(this: SearchPanelView) {
-        const container = this.containerEl.children[1];
+        const container = this.containerEl;
         container.empty();
         // const contentEl = container.createEl("div", {
         //     cls: "langr-search"
