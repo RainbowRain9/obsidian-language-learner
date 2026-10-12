@@ -846,6 +846,14 @@ async function submit() {
 			);
 			data.notes = normalizeNotesValue(data.notes);
 			data.sentences = dedupeSentences(data.sentences || []);
+			// dedupeSentences 内的 sanitize 会剥掉 *，加粗必须放在它之后，按 surface → expression 顺序匹配；
+			// 受设置 bold_word_in_sentence 门控（默认开），关闭后新保存的例句不再加粗
+			if (plugin.settings.bold_word_in_sentence) {
+				data.sentences = data.sentences.map((sen: Sentence) => ({
+					...sen,
+					text: boldWordInSentence(sen.text, data.surface, data.expression),
+				}));
+			}
 			// 超过1条例句时，sentences中的对象会变成Proxy，尚不知原因，因此用JSON转换一下
 
 			let statusCode = await plugin.db.postExpression(data);
@@ -1256,6 +1264,27 @@ function stripGoogleContextMarkers(text?: string | null): string {
 		.trim();
 }
 
+// 保存时给例句原文中的目标词加 **；sanitizeSentenceContext 会剥掉所有 *，因此只能在
+// submit 的 dedupeSentences 之后施加。字母数字与 * 守卫使 unxxx 不被误伤、重复保存不叠 ****
+function boldWordInSentence(text: string, ...candidates: (string | undefined)[]): string {
+	if (!text) return text;
+	const seen = new Set<string>();
+	for (const raw of candidates) {
+		const candidate = (raw || "").trim();
+		if (!candidate) continue;
+		const key = candidate.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const matcher = new RegExp(
+			`(?<![a-z0-9*])${escapeRegExp(candidate)}(?![a-z0-9*])`,
+			"gi"
+		);
+		const wrapped = text.replace(matcher, (match) => `**${match}**`);
+		if (wrapped !== text) return wrapped;
+	}
+	return text;
+}
+
 function extractGoogleContextMeaning(text?: string | null): string {
 	const raw = text || "";
 	const matched = raw.match(/\[\[(.*?)\]\]/);
@@ -1447,7 +1476,7 @@ useEvent(window, "obsidian-langr-search", async (evt: CustomEvent) => {
 				if (!sentenceText) {
 					return null;
 				}
-				return aiTranslate(sentenceText, plugin.settings)
+				return aiTranslate(sentenceText, plugin.settings, { word: selection })
 					.then((translated) => ({
 						sentenceTranslation: decodeHtmlEntities(translated),
 						meaningTranslation: "",
@@ -1583,10 +1612,11 @@ function getTranslationModeShortLabel(mode: "machine" | "ai" | undefined) {
 
 async function translateSentenceByMode(
 	mode: "machine" | "ai",
-	sentence: string
+	sentence: string,
+	word?: string
 ): Promise<string> {
 	if (mode === "ai") {
-		return decodeHtmlEntities(await aiTranslate(sentence, plugin.settings));
+		return decodeHtmlEntities(await aiTranslate(sentence, plugin.settings, { word }));
 	}
 
 	const res = await googleTranslate(sentence, plugin.settings);
@@ -1612,7 +1642,11 @@ const toggleTrans = async (index: number, element: any) => {
 
     // 2. 执行翻译
     try {
-        const result = await translateSentenceByMode(newType, sentence);
+        const result = await translateSentenceByMode(
+            newType,
+            sentence,
+            model.value.surface || model.value.expression
+        );
 
         if (!result) {
             const message = newType === "ai"

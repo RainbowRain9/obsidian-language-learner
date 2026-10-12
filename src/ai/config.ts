@@ -139,7 +139,7 @@ export const AI_PROVIDER_PRESET_META: Record<Exclude<AIProviderPreset, "custom">
 const DEFAULT_AI_PROMPTS: AIPromptConfig = {
     search: "You are a helpful English learning assistant. Explain the meaning of words clearly and provide examples.",
     contextSearch: "You are a helpful English learning assistant. Explain the selected word or phrase in the given sentence. Focus on its meaning in this exact context, then give a concise general meaning and one short usage note. Use markdown.",
-    translate: "Translate the following sentence into Chinese accurately and naturally: {sentence}",
+    translate: "You are a professional English-to-Chinese translator. Translate the given sentence into Chinese accurately and naturally. Output ONLY the Chinese translation, with no explanations or notes. The target word is \"{word}\": wrap ONLY the Chinese word(s) that translate this target word with ** ** (markdown bold), e.g. **这样**. If the target word's meaning is only implied and not explicitly present in the Chinese translation, do not bold anything.\n\nSentence:\n{sentence}",
     card: "You are a helpful English learning assistant. Fill a learner's vocabulary card from the selected expression and optional context. Return only valid JSON with the shape {\"meaning\":\"string\",\"aliases\":[\"string\"],\"tags\":[\"string\"],\"notes\":[\"string\"]}. Keep the meaning concise, aliases practical, tags short, and notes useful for study.",
 };
 

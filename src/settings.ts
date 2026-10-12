@@ -105,6 +105,7 @@ export interface MyPluginSettings {
     line_height: string;
     use_machine_trans: boolean;
     sentence_translation_mode: SentenceTranslationMode;
+    bold_word_in_sentence: boolean;
     hover_definition_enabled: boolean;
     hover_definition_lang: string;
     // indexed db
@@ -180,6 +181,7 @@ export const DEFAULT_SETTINGS: MyPluginSettings = {
     line_height: "1.8em",  // 行高 1.8（舒适阅读）
     use_machine_trans: true,  // ✅ 启用机器翻译
     sentence_translation_mode: "machine",
+    bold_word_in_sentence: true,  // ✅ 收藏单词时自动加粗例句中的目标词
     word_count: true,  // ✅ 显示单词计数
     hover_definition_enabled: true,
     hover_definition_lang: "zh",
@@ -1541,7 +1543,7 @@ export class SettingTab extends PluginSettingTab {
         const promptsSection = createAISection(
             containerEl,
             tr("Prompts"),
-            tr("Prompts stay scene-based, not per-model. Keep {sentence} in the translation prompt if you want sentence substitution.")
+            tr("Prompts stay scene-based, not per-model. Keep {sentence} in the translation prompt if you want sentence substitution; {word} is replaced with the target word so its Chinese counterpart gets bolded.")
         );
         new Setting(promptsSection)
             .setName(tr("Search Prompt"))
@@ -1565,7 +1567,7 @@ export class SettingTab extends PluginSettingTab {
 
         new Setting(promptsSection)
             .setName(t("Translation Prompt"))
-            .setDesc(tr("Use {sentence} as the placeholder"))
+            .setDesc(tr("Use {sentence} as the sentence placeholder and {word} as the target word placeholder"))
             .addTextArea((text) => text
                 .setValue(this.plugin.settings.ai.prompts.translate)
                 .onChange(debounce(async (value) => {
@@ -2308,6 +2310,16 @@ export class SettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.use_machine_trans)
                 .onChange(async (use_machine_trans) => {
                     this.plugin.settings.use_machine_trans = use_machine_trans;
+                    await this.plugin.saveSettings();
+                })
+            );
+        new Setting(containerEl)
+            .setName(t("Bold target word in sentence"))
+            .setDesc(t("Automatically bold the target word in example sentences with ** when saving a word; turn off to stop bolding newly saved sentences"))
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.bold_word_in_sentence)
+                .onChange(async (bold_word_in_sentence) => {
+                    this.plugin.settings.bold_word_in_sentence = bold_word_in_sentence;
                     await this.plugin.saveSettings();
                 })
             );

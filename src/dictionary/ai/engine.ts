@@ -789,10 +789,36 @@ export async function search(
     return requestChatCompletion(settings, messages, { ...requestOptions, cacheKey });
 }
 
-export async function translate(text: string, settings: AISettingsLike): Promise<string> {
+export interface AITranslateContext {
+    /** The target word whose Chinese counterpart should be bolded in the translation. */
+    word?: string;
+}
+
+export async function translate(
+    text: string,
+    settings: AISettingsLike,
+    context?: AITranslateContext
+): Promise<string> {
     const resolved = resolveAIModelForScenario(settings.ai, "translate");
     // Function form: text may contain "$&"/"$'"/"$$" which a string replacement would interpret.
-    const finalPrompt = resolved.prompt.replace("{sentence}", () => text);
+    let finalPrompt = resolved.prompt.replace("{sentence}", () => text);
+    const targetWord = (context?.word || "").trim();
+    if (targetWord) {
+        if (finalPrompt.includes("{word}")) {
+            // split/join replaces every occurrence literally, unlike a string replace()
+            // which would treat the word's "$&" as a pattern.
+            finalPrompt = finalPrompt.split("{word}").join(targetWord);
+        } else {
+            // Custom prompts saved before {word} existed have no bold instruction; append one
+            // so the bolding behavior still applies.
+            finalPrompt +=
+                `\n\nTarget word: "${targetWord}". In the Chinese translation, wrap ONLY the ` +
+                `word(s) that translate this target word with ** ** (markdown bold). ` +
+                `This bold marking is the sole exception to any no-markdown rule above.`;
+        }
+    } else {
+        finalPrompt = finalPrompt.split("{word}").join("");
+    }
     const requestOptions: RequestChatOptions = {
         scenario: "translate",
         maxTokens: 150,
