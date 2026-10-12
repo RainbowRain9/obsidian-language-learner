@@ -191,18 +191,22 @@ function applyChartLabels() {
 }
 
 async function updateChart() {
-	// 获取 7 天趋势数据
-	let data = await plugin.db.countSeven();
-	let dayIgnoreWords = data.map((d) => d.today[0]);
-	let dayNoIgnoreWords = data.map((d) =>
-		d.today.slice(1).reduce((a, b) => a + b)
-	);
+	// 获取 7 天趋势数据；加载失败只影响趋势图，不中断后续 KPI 统计
+	try {
+		let data = await plugin.db.countSeven();
+		let dayIgnoreWords = data.map((d) => d.today[0]);
+		let dayNoIgnoreWords = data.map((d) =>
+			d.today.slice(1).reduce((a, b) => a + b)
+		);
 
-	// 更新原生 SVG 曲线图数据（暂时隐藏累计）
-	chartSeries.value = [
-		{ name: t("Day Ignore"), color: "#4c6ef5", data: dayIgnoreWords, type: "area" },
-		{ name: t("Day Non-Ignore"), color: "#51cf66", data: dayNoIgnoreWords, type: "area" },
-	];
+		// 更新原生 SVG 曲线图数据（暂时隐藏累计）
+		chartSeries.value = [
+			{ name: t("Day Ignore"), color: "#4c6ef5", data: dayIgnoreWords, type: "area" },
+			{ name: t("Day Non-Ignore"), color: "#51cf66", data: dayNoIgnoreWords, type: "area" },
+		];
+	} catch (e) {
+		console.warn("Failed to load seven-day trend data", e);
+	}
 
 	// 获取单词全局状态统计数据
 	try {

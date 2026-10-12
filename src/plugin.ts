@@ -1690,13 +1690,27 @@ export default class LanguageLearner extends Plugin {
 
     //解析某个单词文件的fm信息
     async parserFM(file_path: string) {
+        let fm: Record<string, any> | null = null;
         const cache = this.app.metadataCache.getCache(file_path);
-        if (!cache || !cache.frontmatter) {
+        if (cache?.frontmatter) {
+            fm = cache.frontmatter;
+        } else {
+            // metadataCache 未命中（vault 刚打开 / 文件刚批量生成）时兜底直读文件，
+            // 避免词文件被静默跳过导致单词列表与统计整体为空
+            try {
+                const text = await this.app.vault.adapter.read(file_path);
+                const { fmText } = splitWordFileText(text);
+                if (fmText !== null) {
+                    fm = parseYaml(fmText) as Record<string, any> | null;
+                }
+            } catch (err) {
+                // 读取失败按无 frontmatter 处理，走下方统一告警
+            }
+        }
+        if (!fm) {
             console.warn(`No cache or frontmatter found for file: ${file_path}`);
             return null;
         }
-
-        var fm = cache.frontmatter;
         const {
             expression = '',
             surface = '',

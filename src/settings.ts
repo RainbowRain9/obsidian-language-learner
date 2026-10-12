@@ -2027,6 +2027,9 @@ export class SettingTab extends PluginSettingTab {
                     // 与 plugin.openDB() 一致：按 only_fileDB 选择 provider，而不是无条件切到 LocalDb
                     this.plugin.db = await this.plugin.openDB();
                     await this.plugin.db.open();
+                    // 换库后清缓存并通知各面板重载，避免 Stat / DataPanel 继续显示旧库或空库数据
+                    this.plugin.notifyWordStorageChanged();
+                    dispatchEvent(new CustomEvent("obsidian-langr-refresh-stat"));
                     new Notice(t("Database reopened"));
                 })
             );
@@ -2110,6 +2113,9 @@ export class SettingTab extends PluginSettingTab {
                             // 与 plugin.openDB() 一致：按 only_fileDB 选择 provider，而不是无条件切到 LocalDb
                             this.plugin.db = await this.plugin.openDB();
                             await this.plugin.db.open();
+                            // 清库同样清缓存并通知各面板重载
+                            this.plugin.notifyWordStorageChanged();
+                            dispatchEvent(new CustomEvent("obsidian-langr-refresh-stat"));
                         });
                     modal.open();
                 })

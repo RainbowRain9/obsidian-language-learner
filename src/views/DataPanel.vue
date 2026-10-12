@@ -37,6 +37,7 @@ import {
     Suspense,
     defineAsyncComponent,
     onMounted,
+    onUnmounted,
 } from "vue";
 import {
     NConfigProvider,
@@ -126,8 +127,17 @@ const loadData = async () => {
     checkedTags.value = Array(tags.value.length).fill(false);
     loading.value = false;
 };
+// 词库变化（提交词条 / 换库 / 清库）后重载表格：
+// 此前仅挂载时加载一次，挂载瞬间数据未就绪即永久空白，只能关闭重开视图
+const refreshData = () => {
+    loadData();
+};
 onMounted(() => {
     loadData();
+    addEventListener("obsidian-langr-refresh-stat", refreshData);
+});
+onUnmounted(() => {
+    removeEventListener("obsidian-langr-refresh-stat", refreshData);
 });
 
 let data = ref<Row[]>([]);

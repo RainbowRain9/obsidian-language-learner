@@ -44,9 +44,9 @@
 				</div>
 				<!-- 加一些tag, 可以用来搜索 -->
 				<NFormItem :label="t('Tags')" :label-style="labelStyle" path="tags">
-					<NSelect size="small" v-model:value="model.tags" filterable multiple tag
-						:placeholder="t('Input or select some tags')" :loading="tagLoading" :options="tagOptions"
-						@search="tagSearch"></NSelect>
+				<NSelect size="small" v-model:value="model.tags" filterable multiple tag
+					:placeholder="t('Input or select some tags')" :loading="tagLoading" :options="tagOptions"
+					@search="tagSearch" @update:show="onTagSelectShow"></NSelect>
 				</NFormItem>
 				<!-- 可选,可以记多条笔记 -->
 				<NFormItem :label="t('Notes')" :label-style="labelStyle" path="notes">
@@ -359,11 +359,22 @@ const status = computed(() => [
 let tagOptions = ref<SelectOption[]>([]);
 let tagLoading = ref(false);
 let tags: string[] = [];
+let tagsLoaded = false;
+
+// naive-ui 只在真实键入时触发 @search，仅点开下拉不触发：
+// 打开下拉时预取全部标签，避免初始空列表
+async function onTagSelectShow(show: boolean) {
+	if (show) {
+		await tagSearch("");
+	}
+}
 
 async function tagSearch(query: string) {
 	tagLoading.value = true;
-	if (query.length < 2) {
+	// 首次键入即 ≥2 字符（IME / 粘贴）时 tags 尚未加载，同样先取数再过滤
+	if (query.length < 2 || !tagsLoaded) {
 		tags = await plugin.db.getTags();
+		tagsLoaded = true;
 	}
 	tagLoading.value = false;
 

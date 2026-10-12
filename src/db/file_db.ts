@@ -545,8 +545,12 @@ export class FileDb extends DbProvider {
             "WORD": new Array(5).fill(0),
             "PHRASE": new Array(5).fill(0),
         };
-        (await this.plugin.parserAllFM()).every(word => {
-            counts[word.t as "WORD" | "PHRASE"][word.status]++;
+        (await this.plugin.parserAllFM()).forEach(word => {
+            // word_folder 混入无 type 键的普通笔记（t=''）时跳过该条目，不让整个统计抛错
+            const bucket = counts[word.t as "WORD" | "PHRASE"];
+            if (bucket) {
+                bucket[word.status]++;
+            }
         });
         // await this.idb.expressions.each(expr => {
         //     counts[expr.t as "WORD" | "PHRASE"][expr.status]++;
@@ -578,7 +582,7 @@ export class FileDb extends DbProvider {
                 return expr.t == "WORD" &&
                     expr.date >= span.from &&
                     expr.date <= span.to;
-            }).every(expr => {
+            }).forEach(expr => {
                 today[expr.status]++;
             });
             // 累计
@@ -586,7 +590,7 @@ export class FileDb extends DbProvider {
             word.filter(expr => {
                 return expr.t == "WORD" &&
                     expr.date <= span.to;
-            }).every(expr => {
+            }).forEach(expr => {
                 accumulated[expr.status]++;
             });
 
